@@ -11,7 +11,7 @@ install_windows.bat 실행 (한 번만 실행해도 됨)
 <br />
 run_windows.bat 실행 후, 인터넷 주소창에 해당 주소 입력
 <br />
-> http://127.0.0.8000
+> http://127.0.0.1:8000
 
 사용법:
 <br />
