@@ -14,6 +14,7 @@ from fastapi import FastAPI, File, Form, UploadFile, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from faster_whisper import WhisperModel
 
@@ -36,10 +37,11 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # Whisper model config
 # =========================
 WHISPER_MODEL_NAME = os.environ.get("WHISPER_MODEL", "small")
-WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")  # "cuda" 가능
+WHISPER_DEVICE = os.environ.get("WHISPER_DEVICE", "cpu")   # "cuda" 가능
 WHISPER_COMPUTE = os.environ.get("WHISPER_COMPUTE", "int8")  # cpu면 int8 권장
 
 _whisper_model: Optional[WhisperModel] = None
+
 
 def get_whisper_model() -> WhisperModel:
     global _whisper_model
@@ -51,11 +53,13 @@ def get_whisper_model() -> WhisperModel:
         )
     return _whisper_model
 
+
 # =========================
 # In-memory Job store
 # =========================
 JOBS: Dict[str, Dict[str, Any]] = {}
 JOBS_LOCK = threading.Lock()
+
 
 class GravelJob:
     @staticmethod
@@ -68,32 +72,73 @@ class GravelJob:
             "clips_created": 0,
         }
 
+
 def set_job(job_id: str, **kwargs):
     with JOBS_LOCK:
         JOBS.setdefault(job_id, GravelJob.default(job_id)).update(kwargs)
+
 
 def get_job(job_id: str) -> Optional[Dict[str, Any]]:
     with JOBS_LOCK:
         j = JOBS.get(job_id)
         return dict(j) if j else None
 
+
 # =========================
-# Data utils (json DB)
+# Data utils (json DB) - 깨진 JSON 자동 복구
 # =========================
 def load_data() -> Dict[str, Any]:
     if not DATA_PATH.exists():
         return {"profiles": [], "audios": [], "clips": []}
-    data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
+
+    try:
+        txt = DATA_PATH.read_text(encoding="utf-8")
+        if not txt.strip():
+            return {"profiles": [], "audios": [], "clips": []}
+        data = json.loads(txt)
+    except Exception:
+        try:
+            bak = DATA_PATH.with_suffix(f".broken.{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+            DATA_PATH.replace(bak)
+        except Exception:
+            pass
+        return {"profiles": [], "audios": [], "clips": []}
+
     data.setdefault("profiles", [])
     data.setdefault("audios", [])
     data.setdefault("clips", [])
     return data
 
+
 def save_data(data: Dict[str, Any]):
     DATA_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+
 def now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+# =========================
+# Filename helper (다운로드 파일명 깔끔하게)
+# =========================
+def make_safe_filename(base: str, fallback: str = "clip", max_len: int = 80) -> str:
+    """
+    Windows/브라우저에서 깨지지 않도록 파일명 정리:
+    - 공백 정리
+    - 금지문자 제거: \ / : * ? " < > |
+    - 끝의 점/공백 제거
+    - 너무 길면 자르기
+    """
+    s = (base or "").strip()
+    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r'[\\/:*?"<>|]', "", s)  # Windows forbidden chars
+    s = s.strip(" .")
+    if not s:
+        s = fallback
+    if len(s) > max_len:
+        s = s[:max_len].rstrip(" .")
+    return s
+
 
 # =========================
 # Audio tools (ffmpeg)
@@ -111,22 +156,30 @@ def ffprobe_duration(path: Path) -> float:
     except Exception:
         return 0.0
 
+
 def extract_clip(src: Path, start_s: float, end_s: float, dst: Path):
+    """
+    -to 대신 -t(길이) 사용: '항상 2초로 잘림' 같은 문제를 근본 차단
+    """
     dst.parent.mkdir(parents=True, exist_ok=True)
+
     start_s = max(0.0, float(start_s))
     end_s = max(start_s + 0.01, float(end_s))
+    dur_s = max(0.01, end_s - start_s)
+
     subprocess.check_call([
         "ffmpeg", "-y",
         "-hide_banner", "-loglevel", "error",
-        "-ss", f"{start_s:.3f}",
-        "-to", f"{end_s:.3f}",
         "-i", str(src),
+        "-ss", f"{start_s:.3f}",
+        "-t", f"{dur_s:.3f}",
         "-vn",
         "-acodec", "pcm_s16le",
         "-ar", "44100",
         "-ac", "2",
         str(dst)
     ])
+
 
 # =========================
 # Common sanitize
@@ -136,6 +189,7 @@ def sanitize_text_keep_unicode(s: str) -> str:
     s = re.sub(r"\s+", "", s)
     return s
 
+
 # =========================
 # Korean normalize (basic + sound)
 # =========================
@@ -143,15 +197,17 @@ _CHO = list("ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ")
 _JUNG = list("ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ")
 _JONG = [""] + list("ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ")
 
+
 def is_hangul_syllable(ch: str) -> bool:
-    code = ord(ch)
-    return 0xAC00 <= code <= 0xD7A3
+    return 0xAC00 <= ord(ch) <= 0xD7A3
+
 
 def sanitize_for_ko(s: str) -> str:
     s = (s or "").strip().lower()
     s = re.sub(r"\s+", "", s)
     s = re.sub(r"[\"'.,!?(){}\[\]:;~`@#$%^&*+=/\\|<>—\-]", "", s)
     return s
+
 
 def hangul_to_jamo(s: str) -> str:
     out = []
@@ -171,10 +227,11 @@ def hangul_to_jamo(s: str) -> str:
                 out.append(ch.lower())
     return "".join(out)
 
+
 def norm_basic(s: str) -> str:
     return hangul_to_jamo(sanitize_for_ko(s))
 
-# --- Korean sound approximation (liaison/assimilation subset) ---
+
 JONG_TO_ONSET = {
     "ㄱ": "ㄱ", "ㄲ": "ㄲ", "ㄳ": "ㄱ",
     "ㄴ": "ㄴ", "ㄵ": "ㄴ", "ㄶ": "ㄴ",
@@ -189,10 +246,12 @@ JONG_TO_ONSET = {
     "ㅎ": "ㅎ",
 }
 
+
 def simplify_final_for_pron(jong: str) -> str:
     if not jong:
         return ""
     return JONG_TO_ONSET.get(jong, jong)
+
 
 def decompose_syllables_ko(s: str) -> List[Dict[str, str]]:
     s2 = sanitize_for_ko(s)
@@ -210,6 +269,7 @@ def decompose_syllables_ko(s: str) -> List[Dict[str, str]]:
                 items.append({"type": "other", "val": ch})
     return items
 
+
 def apply_liaison(items: List[Dict[str, str]]) -> None:
     for i in range(len(items) - 1):
         a = items[i]
@@ -225,6 +285,7 @@ def apply_liaison(items: List[Dict[str, str]]) -> None:
             continue
         b["cho"] = move
         a["jong"] = ""
+
 
 def apply_assimilation(items: List[Dict[str, str]]) -> None:
     nasal_next = {"ㄴ", "ㅁ"}
@@ -262,6 +323,7 @@ def apply_assimilation(items: List[Dict[str, str]]) -> None:
             elif jong in labial:
                 a["jong"] = "ㅁ"
 
+
 def syllables_to_jamo(items: List[Dict[str, str]]) -> str:
     out = []
     for it in items:
@@ -273,6 +335,7 @@ def syllables_to_jamo(items: List[Dict[str, str]]) -> str:
             if it["jong"]:
                 out.append(it["jong"])
     return "".join(out)
+
 
 def norm_ko_sound(s: str) -> str:
     items = decompose_syllables_ko(s)
@@ -290,22 +353,24 @@ def norm_ko_sound(s: str) -> str:
 
     return syllables_to_jamo(out_items)
 
+
 # =========================
-# Japanese: kana normalize + romaji/hangul -> kana (hiragana)
+# Japanese normalize + input conversions
 # =========================
 def is_hiragana(ch: str) -> bool:
-    code = ord(ch)
-    return 0x3040 <= code <= 0x309F
+    return 0x3040 <= ord(ch) <= 0x309F
+
 
 def is_katakana(ch: str) -> bool:
-    code = ord(ch)
-    return 0x30A0 <= code <= 0x30FF
+    return 0x30A0 <= ord(ch) <= 0x30FF
+
 
 def kata_to_hira(ch: str) -> str:
     code = ord(ch)
     if 0x30A1 <= code <= 0x30F6:
         return chr(code - 0x60)
     return ch
+
 
 def jp_kana_norm(text: str) -> str:
     t = sanitize_text_keep_unicode(text)
@@ -319,54 +384,54 @@ def jp_kana_norm(text: str) -> str:
             pass
     return "".join(out)
 
+
 _ROMAJI_TABLE = [
-    ("kya","きゃ"),("kyu","きゅ"),("kyo","きょ"),
-    ("gya","ぎゃ"),("gyu","ぎゅ"),("gyo","ぎょ"),
-    ("sha","しゃ"),("shu","しゅ"),("sho","しょ"),
-    ("sya","しゃ"),("syu","しゅ"),("syo","しょ"),
-    ("ja","じゃ"),("ju","じゅ"),("jo","じょ"),
-    ("jya","じゃ"),("jyu","じゅ"),("jyo","じょ"),
-    ("cha","ちゃ"),("chu","ちゅ"),("cho","ちょ"),
-    ("tya","ちゃ"),("tyu","ちゅ"),("tyo","ちょ"),
-    ("nya","にゃ"),("nyu","にゅ"),("nyo","にょ"),
-    ("hya","ひゃ"),("hyu","ひゅ"),("hyo","ひょ"),
-    ("bya","びゃ"),("byu","びゅ"),("byo","びょ"),
-    ("pya","ぴゃ"),("pyu","ぴゅ"),("pyo","ぴょ"),
-    ("mya","みゃ"),("myu","みゅ"),("myo","みょ"),
-    ("rya","りゃ"),("ryu","りゅ"),("ryo","りょ"),
-    ("shi","し"),("chi","ち"),("tsu","つ"),
-    ("fu","ふ"),
-    ("ka","か"),("ki","き"),("ku","く"),("ke","け"),("ko","こ"),
-    ("sa","さ"),("si","し"),("su","す"),("se","せ"),("so","そ"),
-    ("ta","た"),("ti","ち"),("tu","つ"),("te","て"),("to","と"),
-    ("na","な"),("ni","に"),("nu","ぬ"),("ne","ね"),("no","の"),
-    ("ha","は"),("hi","ひ"),("hu","ふ"),("he","へ"),("ho","ほ"),
-    ("ma","ま"),("mi","み"),("mu","む"),("me","め"),("mo","も"),
-    ("ya","や"),("yu","ゆ"),("yo","よ"),
-    ("ra","ら"),("ri","り"),("ru","る"),("re","れ"),("ro","ろ"),
-    ("wa","わ"),("wo","を"),
-    ("ga","が"),("gi","ぎ"),("gu","ぐ"),("ge","げ"),("go","ご"),
-    ("za","ざ"),("zi","じ"),("zu","ず"),("ze","ぜ"),("zo","ぞ"),
-    ("da","だ"),("di","ぢ"),("du","づ"),("de","で"),("do","ど"),
-    ("ba","ば"),("bi","び"),("bu","ぶ"),("be","べ"),("bo","ぼ"),
-    ("pa","ぱ"),("pi","ぴ"),("pu","ぷ"),("pe","ぺ"),("po","ぽ"),
-    ("a","あ"),("i","い"),("u","う"),("e","え"),("o","お"),
-    ("n","ん"),
+    ("kya", "きゃ"), ("kyu", "きゅ"), ("kyo", "きょ"),
+    ("gya", "ぎゃ"), ("gyu", "ぎゅ"), ("gyo", "ぎょ"),
+    ("sha", "しゃ"), ("shu", "しゅ"), ("sho", "しょ"),
+    ("sya", "しゃ"), ("syu", "しゅ"), ("syo", "しょ"),
+    ("ja", "じゃ"), ("ju", "じゅ"), ("jo", "じょ"),
+    ("jya", "じゃ"), ("jyu", "じゅ"), ("jyo", "じょ"),
+    ("cha", "ちゃ"), ("chu", "ちゅ"), ("cho", "ちょ"),
+    ("tya", "ちゃ"), ("tyu", "ちゅ"), ("tyo", "ちょ"),
+    ("nya", "にゃ"), ("nyu", "にゅ"), ("nyo", "にょ"),
+    ("hya", "ひゃ"), ("hyu", "ひゅ"), ("hyo", "ひょ"),
+    ("bya", "びゃ"), ("byu", "びゅ"), ("byo", "びょ"),
+    ("pya", "ぴゃ"), ("pyu", "ぴゅ"), ("pyo", "ぴょ"),
+    ("mya", "みゃ"), ("myu", "みゅ"), ("myo", "みょ"),
+    ("rya", "りゃ"), ("ryu", "りゅ"), ("ryo", "りょ"),
+    ("shi", "し"), ("chi", "ち"), ("tsu", "つ"),
+    ("fu", "ふ"),
+    ("ka", "か"), ("ki", "き"), ("ku", "く"), ("ke", "け"), ("ko", "こ"),
+    ("sa", "さ"), ("si", "し"), ("su", "す"), ("se", "せ"), ("so", "そ"),
+    ("ta", "た"), ("ti", "ち"), ("tu", "つ"), ("te", "て"), ("to", "と"),
+    ("na", "な"), ("ni", "に"), ("nu", "ぬ"), ("ne", "ね"), ("no", "の"),
+    ("ha", "は"), ("hi", "ひ"), ("hu", "ふ"), ("he", "へ"), ("ho", "ほ"),
+    ("ma", "ま"), ("mi", "み"), ("mu", "む"), ("me", "め"), ("mo", "も"),
+    ("ya", "や"), ("yu", "ゆ"), ("yo", "よ"),
+    ("ra", "ら"), ("ri", "り"), ("ru", "る"), ("re", "れ"), ("ro", "ろ"),
+    ("wa", "わ"), ("wo", "を"),
+    ("ga", "が"), ("gi", "ぎ"), ("gu", "ぐ"), ("ge", "げ"), ("go", "ご"),
+    ("za", "ざ"), ("zi", "じ"), ("zu", "ず"), ("ze", "ぜ"), ("zo", "ぞ"),
+    ("da", "だ"), ("di", "ぢ"), ("du", "づ"), ("de", "で"), ("do", "ど"),
+    ("ba", "ば"), ("bi", "び"), ("bu", "ぶ"), ("be", "べ"), ("bo", "ぼ"),
+    ("pa", "ぱ"), ("pi", "ぴ"), ("pu", "ぷ"), ("pe", "ぺ"), ("po", "ぽ"),
+    ("a", "あ"), ("i", "い"), ("u", "う"), ("e", "え"), ("o", "お"),
+    ("n", "ん"),
 ]
+
 
 def romaji_to_hiragana(s: str) -> str:
     x = re.sub(r"[^a-z]", "", (s or "").lower())
     if not x:
         return ""
-
     out = []
     i = 0
     while i < len(x):
-        if i + 1 < len(x) and x[i] == x[i+1] and x[i] in "kstphgzbdrjmc":
+        if i + 1 < len(x) and x[i] == x[i + 1] and x[i] in "kstphgzbdrjmc":
             out.append("っ")
             i += 1
             continue
-
         matched = False
         for key, val in _ROMAJI_TABLE:
             if x.startswith(key, i):
@@ -374,14 +439,22 @@ def romaji_to_hiragana(s: str) -> str:
                 i += len(key)
                 matched = True
                 break
-
         if not matched:
             i += 1
-
     return "".join(out)
 
+
+def hangul_syllable_to_chojung(ch: str) -> Optional[Tuple[str, str]]:
+    if not is_hangul_syllable(ch):
+        return None
+    idx = ord(ch) - 0xAC00
+    cho = _CHO[idx // 588]
+    jung = _JUNG[(idx % 588) // 28]
+    return cho, jung
+
+
 KO_ONSET_TO_ROMA = {
-    "ㅇ": "",  "ㄱ": "g", "ㄲ": "k", "ㅋ": "k",
+    "ㅇ": "", "ㄱ": "g", "ㄲ": "k", "ㅋ": "k",
     "ㄴ": "n", "ㄷ": "d", "ㄸ": "t", "ㅌ": "t",
     "ㄹ": "r", "ㅁ": "m", "ㅂ": "b", "ㅃ": "p", "ㅍ": "p",
     "ㅅ": "s", "ㅆ": "s", "ㅈ": "j", "ㅉ": "ch", "ㅊ": "ch",
@@ -395,13 +468,6 @@ KO_VOWEL_TO_ROMA = {
     "ㅠ": "yu", "ㅡ": "u", "ㅢ": "i", "ㅣ": "i",
 }
 
-def hangul_syllable_to_chojung(ch: str) -> Optional[Tuple[str, str]]:
-    if not is_hangul_syllable(ch):
-        return None
-    idx = ord(ch) - 0xAC00
-    cho = _CHO[idx // 588]
-    jung = _JUNG[(idx % 588) // 28]
-    return cho, jung
 
 def hangul_to_hiragana_guess(s: str) -> str:
     s2 = sanitize_text_keep_unicode(s)
@@ -418,6 +484,7 @@ def hangul_to_hiragana_guess(s: str) -> str:
         romaji.append(r1 + r2)
     return romaji_to_hiragana("".join(romaji))
 
+
 # =========================
 # Scoring
 # =========================
@@ -429,13 +496,14 @@ def score_contains(needle: str, hay: str) -> int:
     n = 3
     if len(needle) < n or len(hay) < n:
         return 0
-    a = {hay[i:i+n] for i in range(len(hay)-n+1)}
-    b = {needle[i:i+n] for i in range(len(needle)-n+1)}
+    a = {hay[i:i + n] for i in range(len(hay) - n + 1)}
+    b = {needle[i:i + n] for i in range(len(needle) - n + 1)}
     if not a or not b:
         return 0
     inter = len(a & b)
     union = len(a | b)
     return int(100 * (inter / union))
+
 
 # =========================
 # Pages
@@ -444,12 +512,14 @@ def score_contains(needle: str, hay: str) -> int:
 def home(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
+
 # =========================
 # Profiles API
 # =========================
 @app.get("/api/profiles")
 def api_get_profiles():
     return {"profiles": load_data()["profiles"]}
+
 
 @app.post("/api/profiles")
 def api_create_profile(name: str = Form(...)):
@@ -462,6 +532,7 @@ def api_create_profile(name: str = Form(...)):
     data["profiles"].append({"id": pid, "name": name, "created_at": now_iso()})
     save_data(data)
     return {"ok": True, "profile": {"id": pid, "name": name}}
+
 
 @app.delete("/api/profiles/{profile_id}")
 def api_delete_profile(profile_id: str):
@@ -499,9 +570,50 @@ def api_delete_profile(profile_id: str):
 
     return {"ok": True, "deleted_clips": len(clips_to_delete), "deleted_audios": len(audios_to_delete)}
 
+
 # =========================
-# Clips API
+# Clips API  (⚠️ bulk routes MUST come BEFORE /api/clips/{clip_id})
 # =========================
+class BulkDeleteRequest(BaseModel):
+    clip_ids: List[str]
+
+
+def _bulk_delete_impl(clip_ids: List[str]) -> Dict[str, Any]:
+    clip_ids = [x for x in (clip_ids or []) if isinstance(x, str) and x.strip()]
+    clip_ids = list(dict.fromkeys(clip_ids))  # unique keep order
+    if not clip_ids:
+        return {"ok": True, "deleted": 0}
+
+    data = load_data()
+    id_set = set(clip_ids)
+
+    existing = [c for c in data["clips"] if c.get("id") in id_set]
+    if not existing:
+        return {"ok": True, "deleted": 0}
+
+    data["clips"] = [c for c in data["clips"] if c.get("id") not in id_set]
+    save_data(data)
+
+    for cid in clip_ids:
+        try:
+            for f in CACHE_DIR.glob(f"{cid}_*.wav"):
+                f.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    return {"ok": True, "deleted": len(existing)}
+
+
+@app.post("/api/clips/bulk_delete")
+def api_bulk_delete_clips_compat(req: BulkDeleteRequest):
+    return _bulk_delete_impl(req.clip_ids)
+
+
+@app.post("/api/clips/bulk-delete")
+def api_bulk_delete_clips(req: BulkDeleteRequest):
+    return _bulk_delete_impl(req.clip_ids)
+
+
 @app.delete("/api/clips/{clip_id}")
 def api_delete_clip(clip_id: str):
     data = load_data()
@@ -519,6 +631,7 @@ def api_delete_clip(clip_id: str):
         pass
 
     return {"ok": True}
+
 
 # =========================
 # Search API
@@ -585,6 +698,7 @@ def api_search(
     scored.sort(key=lambda x: (x[0], x[1].get("created_at", "")), reverse=True)
     return {"results": [c for _, c in scored[:limit]]}
 
+
 # =========================
 # Clip audio (on-demand cut)
 # =========================
@@ -605,6 +719,7 @@ def api_clip_audio(clip_id: str):
 
     start_s = float(clip["start_s"])
     end_s = float(clip["end_s"])
+
     cache_name = f"{clip_id}_{start_s:.3f}_{end_s:.3f}.wav"
     cache_path = CACHE_DIR / cache_name
 
@@ -614,7 +729,36 @@ def api_clip_audio(clip_id: str):
         except subprocess.CalledProcessError as e:
             return JSONResponse({"error": f"ffmpeg 실패: {e}"}, status_code=500)
 
-    return FileResponse(cache_path, media_type="audio/wav", filename=f"{clip_id}.wav")
+    # ✅ 다운로드 파일명: "대사.wav" 기본
+    transcript = (clip.get("transcript") or "").strip()
+    safe_base = make_safe_filename(transcript, fallback="clip", max_len=80)
+
+    # ✅ 같은 대사(=safe_base)가 여러 개면 "(2)", "(3)" 붙이기
+    # 기준: data.json에 있는 클립들 중 같은 safe_base를 가진 것들에서의 순번
+    same = []
+    for c in data.get("clips", []):
+        t = (c.get("transcript") or "").strip()
+        b = make_safe_filename(t, fallback="clip", max_len=80)
+        if b == safe_base:
+            same.append(c)
+
+    # 안정적으로 만들기 위해 created_at + id로 정렬
+    same.sort(key=lambda x: ((x.get("created_at") or ""), (x.get("id") or "")))
+
+    # 현재 clip이 몇 번째인지 찾기
+    idx = 0
+    for i, c in enumerate(same):
+        if c.get("id") == clip_id:
+            idx = i + 1  # 1-based
+            break
+
+    if len(same) <= 1 or idx <= 1:
+        dl_name = f"{safe_base}.wav"
+    else:
+        dl_name = f"{safe_base} ({idx}).wav"
+
+    return FileResponse(cache_path, media_type="audio/wav", filename=dl_name)
+
 
 # =========================
 # Jobs API
@@ -625,6 +769,7 @@ def api_job(job_id: str):
     if not job:
         return JSONResponse({"error": "job을 찾을 수 없어요."}, status_code=404)
     return {"job": job}
+
 
 # =========================
 # Background STT job
@@ -638,11 +783,10 @@ def run_stt_job(job_id: str, profile_id: str, audio_id: str, saved_path: Path):
 
         model = get_whisper_model()
 
-        # ✅ 핵심: 번역이 아니라 "전사"를 강제 + 언어는 auto
         segments, info = model.transcribe(
             str(saved_path),
-            task="transcribe",
-            language=None,      # auto-detect
+            task="transcribe",     # 번역 금지
+            language=None,         # auto
             vad_filter=True,
         )
 
@@ -656,6 +800,7 @@ def run_stt_job(job_id: str, profile_id: str, audio_id: str, saved_path: Path):
 
             start_s = float(seg.start)
             end_s = float(seg.end)
+
             if end_s - start_s < 0.15:
                 continue
 
@@ -695,8 +840,9 @@ def run_stt_job(job_id: str, profile_id: str, audio_id: str, saved_path: Path):
     except Exception as e:
         set_job(job_id, status="error", progress=0, message=f"에러: {type(e).__name__}: {e}", clips_created=0)
 
+
 # =========================
-# Upload API
+# Upload API (single file per request; front can call multiple times)
 # =========================
 @app.post("/api/upload")
 async def api_upload(
