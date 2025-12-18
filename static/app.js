@@ -13,6 +13,10 @@ const btnSearch = document.getElementById("btnSearch");
 const btnReset = document.getElementById("btnReset");
 const elResults = document.getElementById("results");
 
+const btnSelectAll = document.getElementById("btnSelectAll");
+const btnSelectNone = document.getElementById("btnSelectNone");
+const btnDeleteSelected = document.getElementById("btnDeleteSelected");
+
 const audioPlayer = document.getElementById("audioPlayer");
 const playerTitle = document.getElementById("playerTitle");
 const downloadLink = document.getElementById("downloadLink");
@@ -25,6 +29,10 @@ const jobProgress = document.getElementById("jobProgress");
 
 let profiles = [];
 let jobPollTimer = null;
+
+// 검색 결과 캐시 + 선택 상태
+let lastResults = [];
+const selectedClipIds = new Set();
 
 // ===== Helpers =====
 function currentProfileId() {
@@ -40,6 +48,17 @@ async function apiGet(url) {
 
 async function apiPostForm(url, formData) {
   const res = await fetch(url, { method: "POST", body: formData });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "요청 실패");
+  return data;
+}
+
+async function apiPostJson(url, obj) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(obj || {})
+  });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "요청 실패");
   return data;
@@ -84,9 +103,19 @@ function disableDuringJob(disabled) {
   elProfileSelect.disabled = disabled;
   elAudioFile.disabled = disabled;
   uploadForm.querySelector("button[type='submit']").disabled = disabled;
+
   btnSearch.disabled = disabled;
   btnReset.disabled = disabled;
   elSearchMode.disabled = disabled;
+
+  btnSelectAll.disabled = disabled;
+  btnSelectNone.disabled = disabled;
+  btnDeleteSelected.disabled = disabled || selectedClipIds.size === 0;
+}
+
+function updateBulkDeleteButton() {
+  btnDeleteSelected.textContent = `선택 삭제(${selectedClipIds.size})`;
+  btnDeleteSelected.disabled = selectedClipIds.size === 0;
 }
 
 async function refreshProfiles() {
@@ -112,8 +141,17 @@ async function refreshProfiles() {
   }
 }
 
+// ===== Results Rendering with checkboxes =====
 function renderResults(items) {
+  lastResults = items || [];
   elResults.innerHTML = "";
+
+  // 선택 상태 중, 현재 결과에 없는 건 제거(선택 유지 원하면 이 줄 빼면 됨)
+  const present = new Set(lastResults.map(x => x.id));
+  for (const id of Array.from(selectedClipIds)) {
+    if (!present.has(id)) selectedClipIds.delete(id);
+  }
+  updateBulkDeleteButton();
 
   if (!items || items.length === 0) {
     const empty = document.createElement("div");
@@ -124,8 +162,26 @@ function renderResults(items) {
   }
 
   for (const c of items) {
+    const row = document.createElement("div");
+    row.className = "result";
+    row.style.display = "grid";
+    row.style.gridTemplateColumns = "28px 1fr";
+    row.style.columnGap = "10px";
+    row.style.alignItems = "start";
+
+    // checkbox
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = selectedClipIds.has(c.id);
+    cb.style.marginTop = "10px";
+    cb.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (cb.checked) selectedClipIds.add(c.id);
+      else selectedClipIds.delete(c.id);
+      updateBulkDeleteButton();
+    });
+
     const card = document.createElement("div");
-    card.className = "result";
 
     const t = document.createElement("div");
     t.className = "t notranslate";
@@ -160,6 +216,9 @@ function renderResults(items) {
 
       try {
         await apiDelete(`/api/clips/${c.id}`);
+        selectedClipIds.delete(c.id);
+        updateBulkDeleteButton();
+
         if ((downloadLink.href || "").includes(`/api/clip_audio/${c.id}`)) {
           resetPlayer();
         }
@@ -178,7 +237,11 @@ function renderResults(items) {
     card.appendChild(t);
     card.appendChild(m);
 
-    card.addEventListener("click", () => {
+    row.appendChild(cb);
+    row.appendChild(card);
+
+    // click to play
+    row.addEventListener("click", () => {
       const url = `/api/clip_audio/${c.id}`;
       playerTitle.textContent = c.transcript || "재생";
       audioPlayer.src = url;
@@ -187,7 +250,7 @@ function renderResults(items) {
       downloadLink.style.display = "inline";
     });
 
-    elResults.appendChild(card);
+    elResults.appendChild(row);
   }
 }
 
@@ -206,40 +269,53 @@ async function doSearch() {
 }
 
 // ===== Job polling =====
-async function startJobPolling(jobId) {
+async function startJobPolling(jobId, prefixText) {
   stopJobPolling();
   showJobBox(true);
   disableDuringJob(true);
-  setJobProgress(0, "업로드 완료. STT 처리 대기중...");
+  setJobProgress(0, (prefixText ? prefixText + " / " : "") + "STT 처리 대기중...");
 
   async function tick() {
     try {
       const data = await apiGet(`/api/jobs/${jobId}`);
       const job = data.job;
 
-      setJobProgress(job.progress ?? 0, job.message || "처리중...");
+      setJobProgress(job.progress ?? 0, (prefixText ? prefixText + " / " : "") + (job.message || "처리중..."));
 
       if (job.status === "done") {
         stopJobPolling();
         disableDuringJob(false);
         await doSearch();
-        setTimeout(() => showJobBox(false), 1200);
+        return "done";
       } else if (job.status === "error") {
         stopJobPolling();
         disableDuringJob(false);
         alert(job.message || "처리 중 에러");
+        return "error";
       }
     } catch (e) {
-      // 다음 tick에서 재시도
+      // ignore and retry
     }
+    return "running";
   }
 
-  await tick();
-  jobPollTimer = setInterval(tick, 700);
+  const first = await tick();
+  if (first === "done" || first === "error") return first;
+
+  return await new Promise((resolve) => {
+    jobPollTimer = setInterval(async () => {
+      const r = await tick();
+      if (r === "done" || r === "error") {
+        clearInterval(jobPollTimer);
+        jobPollTimer = null;
+        resolve(r);
+      }
+    }, 700);
+  });
 }
 
 // ===== Upload with upload-progress (XHR) =====
-function uploadWithProgress(formData) {
+function uploadWithProgress(profileId, file, prefixText) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/upload", true);
@@ -249,7 +325,7 @@ function uploadWithProgress(formData) {
         const pct = Math.floor((evt.loaded / evt.total) * 100);
         showJobBox(true);
         const mapped = Math.min(20, Math.floor(pct * 0.2));
-        setJobProgress(mapped, `업로드중... (${pct}%)`);
+        setJobProgress(mapped, `${prefixText} / 업로드중... (${pct}%)`);
       }
     };
 
@@ -264,7 +340,11 @@ function uploadWithProgress(formData) {
     };
 
     xhr.onerror = () => reject(new Error("네트워크 오류"));
-    xhr.send(formData);
+
+    const fd = new FormData();
+    fd.append("profile_id", profileId);
+    fd.append("audio", file);
+    xhr.send(fd);
   });
 }
 
@@ -300,6 +380,8 @@ btnDeleteProfile.addEventListener("click", async () => {
   try {
     await apiDelete(`/api/profiles/${pid}`);
     resetPlayer();
+    selectedClipIds.clear();
+    updateBulkDeleteButton();
     await refreshProfiles();
     await doSearch();
   } catch (e) {
@@ -307,33 +389,43 @@ btnDeleteProfile.addEventListener("click", async () => {
   }
 });
 
+// ✅ Multi upload: sequential per file
 uploadForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   try {
     const pid = currentProfileId();
     if (!pid) return alert("프로필을 먼저 선택/생성하세요.");
 
-    const file = elAudioFile.files[0];
-    if (!file) return alert("오디오 파일을 선택하세요.");
+    const files = Array.from(elAudioFile.files || []);
+    if (files.length === 0) return alert("오디오 파일을 선택하세요.");
 
-    const fd = new FormData();
-    fd.append("profile_id", pid);
-    fd.append("audio", file);
-
-    showJobBox(true);
-    setJobProgress(0, "업로드 준비중...");
     disableDuringJob(true);
+    showJobBox(true);
 
-    const res = await uploadWithProgress(fd);
-    elAudioFile.value = "";
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const prefix = `(${i + 1}/${files.length}) ${f.name}`;
 
-    if (res.job_id) {
-      setJobProgress(20, "STT 처리 시작...");
-      await startJobPolling(res.job_id);
-    } else {
-      disableDuringJob(false);
-      alert("job_id를 받지 못했어요.");
+      setJobProgress(0, `${prefix} / 업로드 준비중...`);
+      const res = await uploadWithProgress(pid, f, prefix);
+
+      if (!res.job_id) {
+        alert(`${prefix} / job_id를 받지 못했어요.`);
+        continue;
+      }
+
+      setJobProgress(20, `${prefix} / STT 시작...`);
+      const r = await startJobPolling(res.job_id, prefix);
+      if (r === "error") {
+        // 에러 나도 다음 파일은 계속 진행(원하면 break로 바꾸면 됨)
+      }
     }
+
+    elAudioFile.value = "";
+    setJobProgress(100, "모든 파일 처리 완료!");
+    setTimeout(() => showJobBox(false), 1200);
+    disableDuringJob(false);
+
   } catch (e) {
     disableDuringJob(false);
     alert(e.message);
@@ -346,11 +438,59 @@ btnSearch.addEventListener("click", async () => {
 
 btnReset.addEventListener("click", async () => {
   elSearchInput.value = "";
+  selectedClipIds.clear();
+  updateBulkDeleteButton();
   try { await doSearch(); } catch (e) { alert(e.message); }
 });
 
 elSearchMode.addEventListener("change", async () => {
+  selectedClipIds.clear();
+  updateBulkDeleteButton();
   try { await doSearch(); } catch (e) {}
+});
+
+// ✅ bulk select controls
+btnSelectAll.addEventListener("click", async () => {
+  for (const c of lastResults) selectedClipIds.add(c.id);
+  updateBulkDeleteButton();
+  renderResults(lastResults);
+});
+
+btnSelectNone.addEventListener("click", async () => {
+  selectedClipIds.clear();
+  updateBulkDeleteButton();
+  renderResults(lastResults);
+});
+
+// ✅ bulk delete
+btnDeleteSelected.addEventListener("click", async () => {
+  if (selectedClipIds.size === 0) return;
+
+  const cnt = selectedClipIds.size;
+  const ok = confirm(`선택한 클립 ${cnt}개를 삭제할까요?`);
+  if (!ok) return;
+
+  try {
+    const ids = Array.from(selectedClipIds);
+    const res = await apiPostJson("/api/clips/bulk_delete", { clip_ids: ids });
+
+    // 재생중인 클립이 삭제됐으면 player 초기화
+    const cur = downloadLink.href || "";
+    for (const id of ids) {
+      if (cur.includes(`/api/clip_audio/${id}`)) {
+        resetPlayer();
+        break;
+      }
+    }
+
+    selectedClipIds.clear();
+    updateBulkDeleteButton();
+    await doSearch();
+
+    alert(`삭제 완료: ${res.deleted ?? 0}개`);
+  } catch (e) {
+    alert(e.message);
+  }
 });
 
 // ===== Init =====
@@ -359,6 +499,7 @@ elSearchMode.addEventListener("change", async () => {
     await refreshProfiles();
     await doSearch();
     showJobBox(false);
+    updateBulkDeleteButton();
   } catch (e) {
     alert(e.message);
   }
