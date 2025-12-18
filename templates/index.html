@@ -10,8 +10,8 @@
 <body>
   <header class="wrap header" translate="no">
     <div>
-      <h1 class="notranslate">Source_Extractor (Local)</h1>
-      <p class="sub notranslate">기본/한국어발음/일본어발음 검색 모드</p>
+      <h1 class="notranslate">Voice Search (Local)</h1>
+      <p class="sub notranslate">멀티 업로드 + 체크 일괄 삭제</p>
     </div>
   </header>
 
@@ -35,7 +35,8 @@
 
       <h2 class="notranslate">음성 추가</h2>
       <form id="uploadForm">
-        <input id="audioFile" class="notranslate" type="file" accept=".wav,.mp3,.m4a,.flac,.ogg,.aac" />
+        <!-- ✅ multiple -->
+        <input id="audioFile" class="notranslate" type="file" multiple accept=".wav,.mp3,.m4a,.flac,.ogg,.aac" />
         <button type="submit" class="notranslate">업로드</button>
       </form>
 
@@ -48,7 +49,7 @@
       </div>
 
       <p class="hint notranslate">
-        업로드 후 STT 처리 진행률이 표시됩니다.
+        여러 파일을 선택하면 <b>순차적으로 업로드/STT</b> 처리합니다.
       </p>
     </section>
 
@@ -62,9 +63,16 @@
           <option value="ko_sound">한국어 발음(연음/동화)</option>
           <option value="jp_sound">일본어 발음(로마자/한글→가나)</option>
         </select>
-        <input id="searchInput" class="notranslate" placeholder="예: 를 / 말 / a / ka / 아 / カ / かな" />
+        <input id="searchInput" class="notranslate" placeholder="검색어" />
         <button id="btnSearch" class="notranslate">검색</button>
         <button id="btnReset" class="ghost notranslate">리셋</button>
+      </div>
+
+      <!-- ✅ bulk controls -->
+      <div class="row" style="margin-top:8px;">
+        <button id="btnSelectAll" class="ghost notranslate" type="button">전체 선택</button>
+        <button id="btnSelectNone" class="ghost notranslate" type="button">선택 해제</button>
+        <button id="btnDeleteSelected" class="danger notranslate" type="button" disabled>선택 삭제(0)</button>
       </div>
 
       <div id="results" class="results"></div>
@@ -78,7 +86,7 @@
       </div>
 
       <p class="hint notranslate">
-        ※ 일본어 발음 모드는 현재 “가나(ひらがな/カタカナ)”가 들어있는 텍스트를 가장 잘 찾습니다(한자 읽기 변환은 미구현).
+        체크박스로 여러 클립을 선택해서 한 번에 삭제할 수 있습니다.
       </p>
     </section>
   </main>
