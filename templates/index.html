@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ko" translate="no">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="google" content="notranslate" />
+  <title>Voice Search MVP</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="wrap header" translate="no">
+    <div>
+      <h1 class="notranslate">Voice Search (Local)</h1>
+      <p class="sub notranslate">기본/한국어발음/일본어발음 검색 모드</p>
+    </div>
+  </header>
+
+  <main class="wrap grid" translate="no">
+    <!-- Left -->
+    <section class="card">
+      <h2 class="notranslate">프로필</h2>
+
+      <div class="row">
+        <input id="profileName" class="notranslate" placeholder="새 프로필 이름" />
+        <button id="btnAddProfile" class="notranslate">추가</button>
+      </div>
+
+      <div class="row">
+        <label class="label notranslate">현재 프로필</label>
+        <select id="profileSelect" class="notranslate"></select>
+        <button id="btnDeleteProfile" class="danger notranslate">프로필 삭제</button>
+      </div>
+
+      <hr />
+
+      <h2 class="notranslate">음성 추가</h2>
+      <form id="uploadForm">
+        <input id="audioFile" class="notranslate" type="file" accept=".wav,.mp3,.m4a,.flac,.ogg,.aac" />
+        <button type="submit" class="notranslate">업로드</button>
+      </form>
+
+      <div id="jobBox" class="jobbox" style="display:none;">
+        <div class="jobrow">
+          <div id="jobText" class="jobtext notranslate">처리 준비중...</div>
+          <div id="jobPct" class="jobpct notranslate">0%</div>
+        </div>
+        <progress id="jobProgress" value="0" max="100" class="jobprogress"></progress>
+      </div>
+
+      <p class="hint notranslate">
+        업로드 후 STT 처리 진행률이 표시됩니다.
+      </p>
+    </section>
+
+    <!-- Right -->
+    <section class="card">
+      <h2 class="notranslate">검색</h2>
+
+      <div class="row">
+        <select id="searchMode" class="notranslate">
+          <option value="basic" selected>기본(표기)</option>
+          <option value="ko_sound">한국어 발음(연음/동화)</option>
+          <option value="jp_sound">일본어 발음(로마자/한글→가나)</option>
+        </select>
+        <input id="searchInput" class="notranslate" placeholder="예: 를 / 말 / a / ka / 아 / カ / かな" />
+        <button id="btnSearch" class="notranslate">검색</button>
+        <button id="btnReset" class="ghost notranslate">리셋</button>
+      </div>
+
+      <div id="results" class="results"></div>
+
+      <div class="player card-inner">
+        <div class="player-row">
+          <div class="player-title notranslate" id="playerTitle">재생할 항목을 선택하세요</div>
+          <a id="downloadLink" class="download notranslate" href="#" download style="display:none;">다운로드</a>
+        </div>
+        <audio id="audioPlayer" controls preload="none"></audio>
+      </div>
+
+      <p class="hint notranslate">
+        ※ 일본어 발음 모드는 현재 “가나(ひらがな/カタカナ)”가 들어있는 텍스트를 가장 잘 찾습니다(한자 읽기 변환은 미구현).
+      </p>
+    </section>
+  </main>
+
+  <footer class="wrap footer notranslate" translate="no">
+    <span class="notranslate">Local only • FastAPI + faster-whisper + ffmpeg</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

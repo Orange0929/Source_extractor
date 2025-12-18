@@ -1,0 +1,133 @@
+:root {
+  --bg: #0b0c10;
+  --card: #121318;
+  --text: #e8e8ea;
+  --muted: #a4a6b3;
+  --line: #23242c;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", "Apple SD Gothic Neo", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+.wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+.header h1 { margin: 0 0 4px; font-size: 22px; }
+.sub { margin: 0; color: var(--muted); font-size: 13px; }
+
+.grid {
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .grid { grid-template-columns: 1fr; }
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.25);
+}
+.card h2 { margin: 0 0 10px; font-size: 16px; }
+.card hr { border: 0; border-top: 1px solid var(--line); margin: 14px 0; }
+
+.row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.label { color: var(--muted); font-size: 12px; }
+
+input, select {
+  width: 100%;
+  background: #0f1015;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  outline: none;
+}
+#searchMode { max-width: 220px; }
+
+button {
+  border: 1px solid var(--line);
+  background: #1a1c24;
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+button:hover { filter: brightness(1.1); }
+button.ghost { background: transparent; }
+button.danger {
+  border-color: #3a1f1f;
+  background: #221316;
+}
+button.danger:hover { filter: brightness(1.15); }
+
+.hint { color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+.results {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.result {
+  border: 1px solid var(--line);
+  background: #0f1015;
+  border-radius: 12px;
+  padding: 10px;
+  cursor: pointer;
+}
+.result:hover { filter: brightness(1.08); }
+.result .t { font-size: 14px; margin-bottom: 6px; }
+.result .m { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+
+.player {
+  margin-top: 14px;
+  padding: 12px;
+}
+.card-inner {
+  background: #0f1015;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.player-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.player-title { font-size: 13px; color: var(--muted); }
+.download { font-size: 13px; color: #9aa2ff; text-decoration: none; }
+.download:hover { text-decoration: underline; }
+
+.footer { color: var(--muted); font-size: 12px; }
+
+/* Progress box */
+.jobbox {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  background: #0f1015;
+  border-radius: 12px;
+}
+.jobrow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.jobtext { font-size: 13px; color: var(--muted); }
+.jobpct { font-size: 13px; color: var(--text); }
+.jobprogress {
+  width: 100%;
+  height: 14px;
+}
