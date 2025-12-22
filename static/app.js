@@ -4,6 +4,9 @@ const btnAddProfile = document.getElementById("btnAddProfile");
 const elProfileSelect = document.getElementById("profileSelect");
 const btnDeleteProfile = document.getElementById("btnDeleteProfile");
 
+const btnExportProfile = document.getElementById("btnExportProfile");
+const importZip = document.getElementById("importZip");
+
 const uploadForm = document.getElementById("uploadForm");
 const elAudioFile = document.getElementById("audioFile");
 
@@ -21,18 +24,30 @@ const audioPlayer = document.getElementById("audioPlayer");
 const playerTitle = document.getElementById("playerTitle");
 const downloadLink = document.getElementById("downloadLink");
 
-// progress UI
-const jobBox = document.getElementById("jobBox");
-const jobText = document.getElementById("jobText");
-const jobPct = document.getElementById("jobPct");
-const jobProgress = document.getElementById("jobProgress");
+// ✅ jobs UI
+const jobsArea = document.getElementById("jobsArea");
+
+// ✅ master UI
+const masterBox = document.getElementById("masterBox");
+const masterProgress = document.getElementById("masterProgress");
+const masterPct = document.getElementById("masterPct");
+const btnCancelAll = document.getElementById("btnCancelAll");
+const btnClearJobs = document.getElementById("btnClearJobs");
 
 let profiles = [];
-let jobPollTimer = null;
 
 // 검색 결과 캐시 + 선택 상태
 let lastResults = [];
 const selectedClipIds = new Set();
+
+// job poll timers
+const jobTimers = new Map(); // jobId -> timer
+
+// ✅ 전체 취소/전체 진행 계산용 상태
+let cancelAllRequested = false;
+let currentUploadXhr = null;        // 현재 업로드 중인 XHR
+const knownJobIds = new Set();      // 실제 job_id들(업로드 완료된 것들)
+const tempUploadingIds = new Set(); // uploading-... 임시 카드 id들
 
 // ===== Helpers =====
 function currentProfileId() {
@@ -41,14 +56,14 @@ function currentProfileId() {
 
 async function apiGet(url) {
   const res = await fetch(url);
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "요청 실패");
   return data;
 }
 
 async function apiPostForm(url, formData) {
   const res = await fetch(url, { method: "POST", body: formData });
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "요청 실패");
   return data;
 }
@@ -59,14 +74,14 @@ async function apiPostJson(url, obj) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(obj || {})
   });
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "요청 실패");
   return data;
 }
 
 async function apiDelete(url) {
   const res = await fetch(url, { method: "DELETE" });
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "삭제 실패");
   return data;
 }
@@ -77,40 +92,6 @@ function resetPlayer() {
   playerTitle.textContent = "재생할 항목을 선택하세요";
   downloadLink.href = "#";
   downloadLink.style.display = "none";
-}
-
-function showJobBox(show) {
-  jobBox.style.display = show ? "block" : "none";
-}
-
-function setJobProgress(pct, text) {
-  const p = Math.max(0, Math.min(100, Math.floor(pct)));
-  jobProgress.value = p;
-  jobPct.textContent = `${p}%`;
-  jobText.textContent = text || "";
-}
-
-function stopJobPolling() {
-  if (jobPollTimer) {
-    clearInterval(jobPollTimer);
-    jobPollTimer = null;
-  }
-}
-
-function disableDuringJob(disabled) {
-  btnAddProfile.disabled = disabled;
-  btnDeleteProfile.disabled = disabled || profiles.length === 0;
-  elProfileSelect.disabled = disabled;
-  elAudioFile.disabled = disabled;
-  uploadForm.querySelector("button[type='submit']").disabled = disabled;
-
-  btnSearch.disabled = disabled;
-  btnReset.disabled = disabled;
-  elSearchMode.disabled = disabled;
-
-  btnSelectAll.disabled = disabled;
-  btnSelectNone.disabled = disabled;
-  btnDeleteSelected.disabled = disabled || selectedClipIds.size === 0;
 }
 
 function updateBulkDeleteButton() {
@@ -129,6 +110,7 @@ async function refreshProfiles() {
     opt.textContent = "프로필을 먼저 추가하세요";
     elProfileSelect.appendChild(opt);
     btnDeleteProfile.disabled = true;
+    btnExportProfile.disabled = true;
   } else {
     for (const p of profiles) {
       const opt = document.createElement("option");
@@ -138,7 +120,85 @@ async function refreshProfiles() {
       elProfileSelect.appendChild(opt);
     }
     btnDeleteProfile.disabled = false;
+    btnExportProfile.disabled = false;
   }
+}
+
+// ===== master progress =====
+function setMasterVisible(show) {
+  if (!masterBox) return;
+  masterBox.style.display = show ? "block" : "none";
+}
+
+function updateMasterFromCards() {
+  if (!masterProgress || !masterPct) return;
+
+  const cards = Array.from(jobsArea.querySelectorAll(".jobcard"));
+  if (cards.length === 0) {
+    masterProgress.value = 0;
+    masterPct.textContent = "0%";
+    setMasterVisible(false);
+    return;
+  }
+
+  setMasterVisible(true);
+
+  let sum = 0;
+  let doneCount = 0;
+
+  for (const c of cards) {
+    const pr = c.querySelector(".jobprogress");
+    const v = pr ? Number(pr.value || 0) : 0;
+    sum += v;
+
+    const st = (c.dataset.status || "").toLowerCase();
+    if (st === "done" || st === "error" || st === "cancelled") doneCount += 1;
+  }
+
+  const avg = Math.floor(sum / cards.length);
+  masterProgress.value = Math.max(0, Math.min(100, avg));
+  masterPct.textContent = `${Math.max(0, Math.min(100, avg))}%`;
+
+  // 전체 취소 버튼은 "작업이 존재할 때"만 켜두기
+  if (btnCancelAll) btnCancelAll.disabled = (doneCount === cards.length);
+}
+
+function markAllCardsCancelledUI() {
+  const cards = Array.from(jobsArea.querySelectorAll(".jobcard"));
+  for (const card of cards) {
+    const st = (card.dataset.status || "").toLowerCase();
+    if (st === "done" || st === "error" || st === "cancelled") continue;
+
+    // 강제로 취소 상태 표시
+    card.dataset.status = "cancelled";
+    card.classList.add("jobcancel");
+
+    const jobText = card.querySelector(".jobtext");
+    const btnCancel = card.querySelector(".btnCancel");
+    if (jobText) jobText.textContent = "취소됨";
+    if (btnCancel) btnCancel.disabled = true;
+  }
+}
+
+async function cancelAll() {
+  cancelAllRequested = true;
+
+  // 1) 현재 업로드 중이면 업로드 중단
+  try {
+    if (currentUploadXhr) currentUploadXhr.abort();
+  } catch (e) {}
+
+  // 2) 이미 생성된 모든 job_id에 cancel 요청
+  const ids = Array.from(knownJobIds);
+  await Promise.all(ids.map(async (jobId) => {
+    try { await apiPostJson(`/api/jobs/${jobId}/cancel`, {}); }
+    catch (e) { /* 개별 실패는 무시 */ }
+  }));
+
+  // 3) 폴링 중지 + UI 취소 표시
+  for (const jobId of ids) stopJobPolling(jobId);
+  markAllCardsCancelledUI();
+  updateMasterFromCards();
 }
 
 // ===== Results Rendering with checkboxes =====
@@ -146,7 +206,6 @@ function renderResults(items) {
   lastResults = items || [];
   elResults.innerHTML = "";
 
-  // 선택 상태 중, 현재 결과에 없는 건 제거(선택 유지 원하면 이 줄 빼면 됨)
   const present = new Set(lastResults.map(x => x.id));
   for (const id of Array.from(selectedClipIds)) {
     if (!present.has(id)) selectedClipIds.delete(id);
@@ -169,7 +228,6 @@ function renderResults(items) {
     row.style.columnGap = "10px";
     row.style.alignItems = "start";
 
-    // checkbox
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.checked = selectedClipIds.has(c.id);
@@ -240,7 +298,6 @@ function renderResults(items) {
     row.appendChild(cb);
     row.appendChild(card);
 
-    // click to play
     row.addEventListener("click", () => {
       const url = `/api/clip_audio/${c.id}`;
       playerTitle.textContent = c.transcript || "재생";
@@ -268,68 +325,139 @@ async function doSearch() {
   renderResults(data.results || []);
 }
 
-// ===== Job polling =====
-async function startJobPolling(jobId, prefixText) {
-  stopJobPolling();
-  showJobBox(true);
-  disableDuringJob(true);
-  setJobProgress(0, (prefixText ? prefixText + " / " : "") + "STT 처리 대기중...");
+// ===== Job UI (multi) =====
+function createJobCard(jobId, fileLabel) {
+  const card = document.createElement("div");
+  card.className = "jobcard";
+  card.dataset.jobId = jobId;
+  card.dataset.status = "running";
 
-  async function tick() {
+  card.innerHTML = `
+    <div class="jobhead">
+      <div class="jobtitle notranslate" translate="no">
+        <b>STT</b> <span class="mono">${escapeHtml(fileLabel || "")}</span>
+      </div>
+      <button class="danger ghost notranslate btnCancel" type="button">취소</button>
+    </div>
+    <div class="jobrow">
+      <div class="jobtext notranslate" translate="no">대기중...</div>
+      <div class="jobpct notranslate" translate="no">0%</div>
+    </div>
+    <progress class="jobprogress" value="0" max="100"></progress>
+  `;
+
+  const btnCancel = card.querySelector(".btnCancel");
+  btnCancel.addEventListener("click", async () => {
+    try {
+      const realId = card.dataset.jobId || jobId;
+      if (realId && !String(realId).startsWith("uploading-")) {
+        await apiPostJson(`/api/jobs/${realId}/cancel`, {});
+      } else {
+        // 업로드 중 임시 카드면 UI만 취소 표시
+        card.dataset.status = "cancelled";
+        card.classList.add("jobcancel");
+        btnCancel.disabled = true;
+        const jobText = card.querySelector(".jobtext");
+        if (jobText) jobText.textContent = "취소됨(업로드 중단)";
+      }
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      updateMasterFromCards();
+    }
+  });
+
+  jobsArea.prepend(card);
+  updateMasterFromCards();
+  return card;
+}
+
+function updateJobCard(card, job, prefixText) {
+  const jobText = card.querySelector(".jobtext");
+  const jobPct = card.querySelector(".jobpct");
+  const jobProgress = card.querySelector(".jobprogress");
+  const btnCancel = card.querySelector(".btnCancel");
+
+  const p = Math.max(0, Math.min(100, Math.floor(job.progress ?? 0)));
+  jobProgress.value = p;
+  jobPct.textContent = `${p}%`;
+
+  const msg = job.message || "";
+  jobText.textContent = (prefixText ? `${prefixText} / ` : "") + msg;
+
+  const st = (job.status || "").toLowerCase();
+  if (st) card.dataset.status = st;
+
+  if (st === "done") {
+    btnCancel.disabled = true;
+    card.classList.add("jobdone");
+  } else if (st === "error") {
+    btnCancel.disabled = true;
+    card.classList.add("joberror");
+  } else if (st === "cancelled") {
+    btnCancel.disabled = true;
+    card.classList.add("jobcancel");
+  }
+
+  updateMasterFromCards();
+}
+
+function startJobPolling(jobId, card, prefixText) {
+  stopJobPolling(jobId);
+
+  const tick = async () => {
+    if (cancelAllRequested) return;
+
     try {
       const data = await apiGet(`/api/jobs/${jobId}`);
       const job = data.job;
 
-      setJobProgress(job.progress ?? 0, (prefixText ? prefixText + " / " : "") + (job.message || "처리중..."));
+      updateJobCard(card, job, prefixText);
 
-      if (job.status === "done") {
-        stopJobPolling();
-        disableDuringJob(false);
-        await doSearch();
-        return "done";
-      } else if (job.status === "error") {
-        stopJobPolling();
-        disableDuringJob(false);
-        alert(job.message || "처리 중 에러");
-        return "error";
+      const st = (job.status || "").toLowerCase();
+      if (st === "done" || st === "error" || st === "cancelled") {
+        stopJobPolling(jobId);
+
+        // 완료되면 검색 자동 갱신
+        if (st === "done") {
+          await doSearch().catch(() => {});
+        }
       }
     } catch (e) {
-      // ignore and retry
+      // 서버 리로드 등 일시 에러는 무시하고 계속
     }
-    return "running";
+  };
+
+  tick();
+  const t = setInterval(tick, 700);
+  jobTimers.set(jobId, t);
+}
+
+function stopJobPolling(jobId) {
+  const t = jobTimers.get(jobId);
+  if (t) {
+    clearInterval(t);
+    jobTimers.delete(jobId);
   }
-
-  const first = await tick();
-  if (first === "done" || first === "error") return first;
-
-  return await new Promise((resolve) => {
-    jobPollTimer = setInterval(async () => {
-      const r = await tick();
-      if (r === "done" || r === "error") {
-        clearInterval(jobPollTimer);
-        jobPollTimer = null;
-        resolve(r);
-      }
-    }, 700);
-  });
 }
 
 // ===== Upload with upload-progress (XHR) =====
-function uploadWithProgress(profileId, file, prefixText) {
+function uploadWithProgress(profileId, file, prefixText, onUploadProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    currentUploadXhr = xhr;
+
     xhr.open("POST", "/api/upload", true);
 
     xhr.upload.onprogress = (evt) => {
-      if (evt.lengthComputable) {
+      if (evt.lengthComputable && onUploadProgress) {
         const pct = Math.floor((evt.loaded / evt.total) * 100);
-        showJobBox(true);
-        const mapped = Math.min(20, Math.floor(pct * 0.2));
-        setJobProgress(mapped, `${prefixText} / 업로드중... (${pct}%)`);
+        onUploadProgress(pct, prefixText);
       }
     };
 
     xhr.onload = () => {
+      currentUploadXhr = null;
       try {
         const data = JSON.parse(xhr.responseText || "{}");
         if (xhr.status >= 200 && xhr.status < 300) resolve(data);
@@ -339,7 +467,15 @@ function uploadWithProgress(profileId, file, prefixText) {
       }
     };
 
-    xhr.onerror = () => reject(new Error("네트워크 오류"));
+    xhr.onerror = () => {
+      currentUploadXhr = null;
+      reject(new Error("네트워크 오류"));
+    };
+
+    xhr.onabort = () => {
+      currentUploadXhr = null;
+      reject(new Error("업로드 취소됨"));
+    };
 
     const fd = new FormData();
     fd.append("profile_id", profileId);
@@ -389,7 +525,73 @@ btnDeleteProfile.addEventListener("click", async () => {
   }
 });
 
-// ✅ Multi upload: sequential per file
+// ✅ Export
+btnExportProfile.addEventListener("click", () => {
+  const pid = currentProfileId();
+  if (!pid) return alert("프로필을 먼저 선택하세요.");
+  window.location.href = `/api/export/profile/${pid}`;
+});
+
+// ✅ Import
+importZip.addEventListener("change", async (ev) => {
+  const f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+
+  try {
+    const fd = new FormData();
+    fd.append("file", f);
+
+    const res = await apiPostForm("/api/import", fd);
+
+    await refreshProfiles();
+
+    // ✅ import된 프로필로 자동 선택
+    const importedId = res?.imported_profile?.id;
+    if (importedId) {
+      elProfileSelect.value = importedId;
+    }
+
+    await doSearch();
+    alert(`가져오기 완료! (클립 ${res.clips ?? 0}개 / 오디오 ${res.audios ?? 0}개)`);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    ev.target.value = "";
+  }
+});
+
+
+// ✅ 전체 취소 버튼
+if (btnCancelAll) {
+  btnCancelAll.addEventListener("click", async () => {
+    const ok = confirm("현재 업로드/STT 작업을 전부 취소할까요?");
+    if (!ok) return;
+    await cancelAll();
+  });
+}
+
+// ✅ 작업 목록 지우기(UI만)
+if (btnClearJobs) {
+  btnClearJobs.addEventListener("click", () => {
+    // 폴링 정리
+    for (const [jobId, t] of jobTimers.entries()) {
+      clearInterval(t);
+    }
+    jobTimers.clear();
+
+    knownJobIds.clear();
+    tempUploadingIds.clear();
+    cancelAllRequested = false;
+    currentUploadXhr = null;
+
+    jobsArea.innerHTML = "";
+    updateMasterFromCards(); // master 숨김 처리 포함
+  });
+}
+
+// ✅ Multi upload:
+// - 업로드는 순차(XHR로 진행률 표시)
+// - 업로드 완료 즉시 job 폴링 시작 (STT는 서버에서 병렬로 동시에 돌아감)
 uploadForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   try {
@@ -399,36 +601,105 @@ uploadForm.addEventListener("submit", async (ev) => {
     const files = Array.from(elAudioFile.files || []);
     if (files.length === 0) return alert("오디오 파일을 선택하세요.");
 
-    disableDuringJob(true);
-    showJobBox(true);
+    // 시작 시 상태 리셋
+    cancelAllRequested = false;
+    setMasterVisible(true);
+
+    // 업로드 중에는 업로드만 잠깐 막기
+    uploadForm.querySelector("button[type='submit']").disabled = true;
+    elAudioFile.disabled = true;
 
     for (let i = 0; i < files.length; i++) {
+      if (cancelAllRequested) break;
+
       const f = files[i];
       const prefix = `(${i + 1}/${files.length}) ${f.name}`;
 
-      setJobProgress(0, `${prefix} / 업로드 준비중...`);
-      const res = await uploadWithProgress(pid, f, prefix);
+      // job 카드 먼저 만들고 "업로드중"으로 표시
+      const tempJobId = `uploading-${Date.now()}-${i}`;
+      tempUploadingIds.add(tempJobId);
 
-      if (!res.job_id) {
-        alert(`${prefix} / job_id를 받지 못했어요.`);
-        continue;
+      const card = createJobCard(tempJobId, prefix);
+      updateJobCard(card, { progress: 0, message: "업로드중...", status: "running" }, "");
+
+      let res;
+      try {
+        res = await uploadWithProgress(
+          pid,
+          f,
+          prefix,
+          (pct) => {
+            // 업로드는 0~20으로 매핑해서 보여줌
+            const mapped = Math.min(20, Math.floor(pct * 0.2));
+            updateJobCard(card, { progress: mapped, message: `업로드중... (${pct}%)`, status: "running" }, "");
+          }
+        );
+      } catch (e) {
+        // 전체 취소로 인한 abort 포함
+        if (cancelAllRequested || String(e.message || "").includes("취소")) {
+          card.dataset.status = "cancelled";
+          card.classList.add("jobcancel");
+          const btnCancel = card.querySelector(".btnCancel");
+          if (btnCancel) btnCancel.disabled = true;
+          const jobText = card.querySelector(".jobtext");
+          if (jobText) jobText.textContent = "취소됨(업로드 중단)";
+          updateMasterFromCards();
+          break;
+        } else {
+          card.dataset.status = "error";
+          card.classList.add("joberror");
+          const btnCancel = card.querySelector(".btnCancel");
+          if (btnCancel) btnCancel.disabled = true;
+          const jobText = card.querySelector(".jobtext");
+          if (jobText) jobText.textContent = `업로드 실패: ${e.message}`;
+          updateMasterFromCards();
+          continue;
+        }
+      } finally {
+        currentUploadXhr = null;
       }
 
-      setJobProgress(20, `${prefix} / STT 시작...`);
-      const r = await startJobPolling(res.job_id, prefix);
-      if (r === "error") {
-        // 에러 나도 다음 파일은 계속 진행(원하면 break로 바꾸면 됨)
+      if (cancelAllRequested) {
+        // 업로드는 끝났는데 바로 전체취소 눌렀을 수도 있음
+        const realJobId = res && res.job_id;
+        if (realJobId) {
+          try { await apiPostJson(`/api/jobs/${realJobId}/cancel`, {}); } catch (e) {}
+        }
+        card.dataset.status = "cancelled";
+        card.classList.add("jobcancel");
+        updateMasterFromCards();
+        break;
       }
+
+      // 임시 job 카드 -> 진짜 jobId로 교체
+      const realJobId = res.job_id;
+      knownJobIds.add(realJobId);
+
+      card.dataset.jobId = realJobId;
+      tempUploadingIds.delete(tempJobId);
+
+      updateJobCard(card, { progress: 20, message: "STT 대기중...", status: "queued" }, "");
+
+      // 취소 버튼도 실제 jobId로 동작하도록 재바인딩
+      const btnCancel = card.querySelector(".btnCancel");
+      btnCancel.disabled = false;
+      btnCancel.onclick = async () => {
+        try { await apiPostJson(`/api/jobs/${realJobId}/cancel`, {}); }
+        catch (e) { alert(e.message); }
+      };
+
+      // ✅ 여기서부터 각 job 폴링을 "동시에" 시작
+      startJobPolling(realJobId, card, prefix);
     }
 
     elAudioFile.value = "";
-    setJobProgress(100, "모든 파일 처리 완료!");
-    setTimeout(() => showJobBox(false), 1200);
-    disableDuringJob(false);
+    updateMasterFromCards();
 
   } catch (e) {
-    disableDuringJob(false);
     alert(e.message);
+  } finally {
+    uploadForm.querySelector("button[type='submit']").disabled = false;
+    elAudioFile.disabled = false;
   }
 });
 
@@ -474,7 +745,6 @@ btnDeleteSelected.addEventListener("click", async () => {
     const ids = Array.from(selectedClipIds);
     const res = await apiPostJson("/api/clips/bulk_delete", { clip_ids: ids });
 
-    // 재생중인 클립이 삭제됐으면 player 초기화
     const cur = downloadLink.href || "";
     for (const id of ids) {
       if (cur.includes(`/api/clip_audio/${id}`)) {
@@ -493,13 +763,22 @@ btnDeleteSelected.addEventListener("click", async () => {
   }
 });
 
+function escapeHtml(s) {
+  return (s || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
 // ===== Init =====
 (async function init() {
   try {
     await refreshProfiles();
     await doSearch();
-    showJobBox(false);
     updateBulkDeleteButton();
+    updateMasterFromCards(); // master 숨김 상태 정리
   } catch (e) {
     alert(e.message);
   }
