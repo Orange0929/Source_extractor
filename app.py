@@ -8,6 +8,8 @@ import subprocess
 import threading
 import zipfile
 import shutil
+import mimetypes
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
@@ -18,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from starlette.background import BackgroundTask
 
 from faster_whisper import WhisperModel
 
@@ -31,11 +34,13 @@ CACHE_DIR = BASE_DIR / "clips_cache"
 
 EXPORT_DIR = BASE_DIR / "exports"
 IMPORT_DIR = BASE_DIR / "imports_tmp"
+WAVEFORM_DIR = BASE_DIR / "waveform_cache"
 
 UPLOAD_DIR.mkdir(exist_ok=True)
 CACHE_DIR.mkdir(exist_ok=True)
 EXPORT_DIR.mkdir(exist_ok=True)
 IMPORT_DIR.mkdir(exist_ok=True)
+WAVEFORM_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="Voice Search App")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -229,6 +234,39 @@ def extract_clip(src: Path, start_s: float, end_s: float, dst: Path):
         "-ac", "2",
         str(dst)
     ])
+
+
+def audio_timeline_source(src: Path) -> Path:
+    """Return the source used for waveform, preview and manual clip timing.
+
+    app_fixed replaces this with its canonical sample-timed FLAC provider. The
+    fallback keeps app.py usable on its own.
+    """
+    return src
+
+
+def ensure_clip_cache(clip: Dict[str, Any], audio: Dict[str, Any]) -> Path:
+    clip_id = str(clip.get("id") or "clip")
+    start_s = float(clip["start_s"])
+    end_s = float(clip["end_s"])
+    cache_name = f"{clip_id}_{start_s:.6f}_{end_s:.6f}.wav"
+    cache_path = CACHE_DIR / cache_name
+
+    if cache_path.exists() and cache_path.stat().st_size > 0:
+        return cache_path
+
+    src = UPLOAD_DIR / str(audio["path"])
+    if not src.exists():
+        raise FileNotFoundError("원본 파일이 없어요.")
+
+    tmp = cache_path.with_name(f".{cache_path.stem}.{uuid.uuid4().hex}.tmp.wav")
+    try:
+        extract_clip(src, start_s, end_s, tmp)
+        tmp.replace(cache_path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+    return cache_path
 
 
 # =========================
@@ -619,6 +657,10 @@ def api_delete_profile(profile_id: str):
             path = a.get("path")
             if path:
                 (UPLOAD_DIR / path).unlink(missing_ok=True)
+            audio_id = a.get("id")
+            if audio_id:
+                for f in WAVEFORM_DIR.glob(f"{audio_id}_*.png"):
+                    f.unlink(missing_ok=True)
     except Exception:
         pass
 
@@ -630,6 +672,14 @@ def api_delete_profile(profile_id: str):
 # =========================
 class BulkDeleteRequest(BaseModel):
     clip_ids: List[str]
+
+
+class ManualClipRequest(BaseModel):
+    profile_id: str
+    audio_id: str
+    start_s: float
+    end_s: float
+    transcript: str = ""
 
 
 def _bulk_delete_impl(clip_ids: List[str]) -> Dict[str, Any]:
@@ -668,6 +718,137 @@ def api_bulk_delete_clips(req: BulkDeleteRequest):
     return _bulk_delete_impl(req.clip_ids)
 
 
+@app.post("/api/clips/bulk_download")
+def api_bulk_download_clips(req: BulkDeleteRequest):
+    clip_ids = [x for x in (req.clip_ids or []) if isinstance(x, str) and x.strip()]
+    clip_ids = list(dict.fromkeys(clip_ids))
+    if not clip_ids:
+        return JSONResponse({"error": "다운로드할 클립을 선택하세요."}, status_code=400)
+    if len(clip_ids) > 5000:
+        return JSONResponse({"error": "한 번에 최대 5000개까지 추출할 수 있어요."}, status_code=400)
+
+    data = load_data()
+    clips_by_id = {c.get("id"): c for c in data.get("clips", [])}
+    audios_by_id = {a.get("id"): a for a in data.get("audios", [])}
+
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    zip_name = f"voice_clips_{stamp}.zip"
+    download_id = uuid.uuid4().hex
+    zip_path = EXPORT_DIR / f"batch_{download_id}_{zip_name}"
+    name_counts: Dict[str, int] = {}
+    written = 0
+
+    try:
+        # WAV is already PCM, so storing it is faster than trying to deflate it.
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as z:
+            for clip_id in clip_ids:
+                clip = clips_by_id.get(clip_id)
+                if not clip:
+                    continue
+                audio = audios_by_id.get(clip.get("audio_id"))
+                if not audio:
+                    continue
+
+                wav_path = ensure_clip_cache(clip, audio)
+                safe_base = make_safe_filename(
+                    (clip.get("transcript") or "").strip(),
+                    fallback="clip",
+                    max_len=80,
+                )
+                name_counts[safe_base] = name_counts.get(safe_base, 0) + 1
+                index = name_counts[safe_base]
+                arcname = f"{safe_base}.wav" if index == 1 else f"{safe_base} ({index}).wav"
+                z.write(wav_path, arcname=arcname)
+                written += 1
+    except (OSError, subprocess.CalledProcessError) as exc:
+        zip_path.unlink(missing_ok=True)
+        return JSONResponse({"error": f"일괄 추출 실패: {exc}"}, status_code=500)
+
+    if written == 0:
+        zip_path.unlink(missing_ok=True)
+        return JSONResponse({"error": "추출할 수 있는 클립이 없어요."}, status_code=404)
+
+    return {
+        "ok": True,
+        "count": written,
+        "filename": zip_name,
+        "download_url": f"/api/clips/bulk_download/{download_id}",
+    }
+
+
+@app.get("/api/clips/bulk_download/{download_id}")
+def api_get_bulk_download(download_id: str):
+    if not re.fullmatch(r"[0-9a-f]{32}", download_id or ""):
+        return JSONResponse({"error": "잘못된 다운로드 ID예요."}, status_code=400)
+
+    matches = list(EXPORT_DIR.glob(f"batch_{download_id}_voice_clips_*.zip"))
+    if len(matches) != 1:
+        return JSONResponse({"error": "다운로드 파일이 없거나 이미 사용됐어요."}, status_code=404)
+
+    zip_path = matches[0]
+    prefix = f"batch_{download_id}_"
+    zip_name = zip_path.name[len(prefix):]
+    return FileResponse(
+        zip_path,
+        media_type="application/zip",
+        filename=zip_name,
+        background=BackgroundTask(zip_path.unlink, missing_ok=True),
+    )
+
+
+@app.post("/api/clips/manual")
+def api_create_manual_clip(req: ManualClipRequest):
+    raw_start = float(req.start_s)
+    raw_end = float(req.end_s)
+    if not math.isfinite(raw_start) or not math.isfinite(raw_end):
+        return JSONResponse({"error": "올바른 시작/끝 시간을 입력하세요."}, status_code=400)
+    start_s = max(0.0, raw_start)
+    end_s = raw_end
+    if end_s - start_s < 0.01:
+        return JSONResponse({"error": "구간 길이는 최소 0.01초여야 해요."}, status_code=400)
+
+    with DATA_LOCK:
+        data = load_data()
+        if not any(p.get("id") == req.profile_id for p in data.get("profiles", [])):
+            return JSONResponse({"error": "프로필을 찾을 수 없어요."}, status_code=404)
+
+        audio = next((a for a in data.get("audios", []) if a.get("id") == req.audio_id), None)
+        if not audio or audio.get("profile_id") != req.profile_id:
+            return JSONResponse({"error": "현재 프로필의 원본 오디오가 아니에요."}, status_code=404)
+
+        src = UPLOAD_DIR / str(audio.get("path") or "")
+        if not src.exists():
+            return JSONResponse({"error": "원본 파일이 없어요."}, status_code=404)
+
+        duration = ffprobe_duration(audio_timeline_source(src))
+        if duration > 0:
+            end_s = min(end_s, duration)
+        if end_s - start_s < 0.01:
+            return JSONResponse({"error": "선택 구간이 원본 길이를 벗어났어요."}, status_code=400)
+
+        transcript = (req.transcript or "").strip()
+        if not transcript:
+            transcript = f"수동 구간 {start_s:.3f}-{end_s:.3f}"
+
+        clip = {
+            "id": str(uuid.uuid4()),
+            "profile_id": req.profile_id,
+            "audio_id": req.audio_id,
+            "start_s": start_s,
+            "end_s": end_s,
+            "transcript": transcript,
+            "norm": norm_basic(transcript),
+            "ko_pron_norm": norm_ko_sound(transcript),
+            "jp_kana_norm": jp_kana_norm(transcript),
+            "created_at": now_iso(),
+            "manual": True,
+        }
+        data["clips"].append(clip)
+        save_data(data)
+
+    return {"ok": True, "clip": clip}
+
+
 @app.delete("/api/clips/{clip_id}")
 def api_delete_clip(clip_id: str):
     data = load_data()
@@ -690,13 +871,7 @@ def api_delete_clip(clip_id: str):
 # =========================
 # Search API
 # =========================
-@app.get("/api/search")
-def api_search(
-    q: str = "",
-    profile_id: Optional[str] = None,
-    limit: int = 50,
-    mode: str = "basic",
-):
+def search_clips(q: str, profile_id: Optional[str], mode: str) -> List[Dict[str, Any]]:
     data = load_data()
     mode = (mode or "basic").lower()
     if mode not in ("basic", "ko_sound", "jp_sound"):
@@ -726,8 +901,11 @@ def api_search(
             needle = ""
 
     if not needle:
-        clips_sorted = sorted(clips, key=lambda c: c.get("created_at", ""), reverse=True)[:limit]
-        return {"results": clips_sorted}
+        return sorted(
+            clips,
+            key=lambda c: ((c.get("created_at") or ""), (c.get("id") or "")),
+            reverse=True,
+        )
 
     scored: List[Tuple[int, Dict[str, Any]]] = []
 
@@ -749,8 +927,113 @@ def api_search(
         if s > 0:
             scored.append((s, c))
 
-    scored.sort(key=lambda x: (x[0], x[1].get("created_at", "")), reverse=True)
-    return {"results": [c for _, c in scored[:limit]]}
+    scored.sort(
+        key=lambda x: (x[0], (x[1].get("created_at") or ""), (x[1].get("id") or "")),
+        reverse=True,
+    )
+    return [c for _, c in scored]
+
+
+@app.get("/api/search/ids")
+def api_search_ids(
+    q: str = "",
+    profile_id: Optional[str] = None,
+    mode: str = "basic",
+):
+    matches = search_clips(q, profile_id, mode)
+    return {"ids": [c.get("id") for c in matches if c.get("id")], "total": len(matches)}
+
+
+@app.get("/api/search")
+def api_search(
+    q: str = "",
+    profile_id: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    mode: str = "basic",
+):
+    limit = min(500, max(1, int(limit)))
+    offset = max(0, int(offset))
+    matches = search_clips(q, profile_id, mode)
+    page = matches[offset:offset + limit]
+    total = len(matches)
+    return {
+        "results": page,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(page) < total,
+    }
+
+
+# =========================
+# Original audio / waveform for manual range extraction
+# =========================
+@app.get("/api/audios")
+def api_list_audios(profile_id: Optional[str] = None):
+    audios = load_data().get("audios", [])
+    if profile_id:
+        audios = [a for a in audios if a.get("profile_id") == profile_id]
+    audios = sorted(
+        audios,
+        key=lambda a: ((a.get("created_at") or ""), (a.get("id") or "")),
+        reverse=True,
+    )
+    return {"audios": audios}
+
+
+def _find_audio(audio_id: str) -> Tuple[Optional[Dict[str, Any]], Optional[Path]]:
+    data = load_data()
+    audio = next((a for a in data.get("audios", []) if a.get("id") == audio_id), None)
+    if not audio:
+        return None, None
+    src = UPLOAD_DIR / str(audio.get("path") or "")
+    if not src.exists():
+        return audio, None
+    return audio, audio_timeline_source(src)
+
+
+@app.get("/api/audio_source/{audio_id}")
+def api_audio_source(audio_id: str):
+    audio, src = _find_audio(audio_id)
+    if not audio:
+        return JSONResponse({"error": "원본 오디오를 찾을 수 없어요."}, status_code=404)
+    if not src or not src.exists():
+        return JSONResponse({"error": "원본 파일이 없어요."}, status_code=404)
+    media_type = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
+    return FileResponse(src, media_type=media_type)
+
+
+@app.get("/api/audio_waveform/{audio_id}")
+def api_audio_waveform(audio_id: str, width: int = 4000, height: int = 160):
+    width = min(8000, max(800, int(width)))
+    height = min(360, max(80, int(height)))
+    audio, src = _find_audio(audio_id)
+    if not audio:
+        return JSONResponse({"error": "원본 오디오를 찾을 수 없어요."}, status_code=404)
+    if not src or not src.exists():
+        return JSONResponse({"error": "원본 파일이 없어요."}, status_code=404)
+
+    cache_path = WAVEFORM_DIR / f"{audio_id}_{width}x{height}.png"
+    if not cache_path.exists() or cache_path.stat().st_size == 0:
+        tmp = cache_path.with_name(f".{cache_path.stem}.{uuid.uuid4().hex}.tmp.png")
+        try:
+            subprocess.check_call([
+                "ffmpeg", "-y",
+                "-hide_banner", "-loglevel", "error",
+                "-i", str(src),
+                "-filter_complex",
+                f"aformat=channel_layouts=mono,showwavespic=s={width}x{height}:colors=0x8391ff:draw=full",
+                "-frames:v", "1",
+                str(tmp),
+            ])
+            tmp.replace(cache_path)
+        except subprocess.CalledProcessError as exc:
+            return JSONResponse({"error": f"파형 생성 실패: {exc}"}, status_code=500)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    return FileResponse(cache_path, media_type="image/png")
 
 
 # =========================
@@ -771,17 +1054,10 @@ def api_clip_audio(clip_id: str):
     if not src.exists():
         return JSONResponse({"error": "원본 파일이 없어요."}, status_code=404)
 
-    start_s = float(clip["start_s"])
-    end_s = float(clip["end_s"])
-
-    cache_name = f"{clip_id}_{start_s:.3f}_{end_s:.3f}.wav"
-    cache_path = CACHE_DIR / cache_name
-
-    if not cache_path.exists():
-        try:
-            extract_clip(src, start_s, end_s, cache_path)
-        except subprocess.CalledProcessError as e:
-            return JSONResponse({"error": f"ffmpeg 실패: {e}"}, status_code=500)
+    try:
+        cache_path = ensure_clip_cache(clip, audio)
+    except (OSError, subprocess.CalledProcessError) as e:
+        return JSONResponse({"error": f"ffmpeg 실패: {e}"}, status_code=500)
 
     transcript = (clip.get("transcript") or "").strip()
     safe_base = make_safe_filename(transcript, fallback="clip", max_len=80)
