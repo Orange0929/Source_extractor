@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+
+uploads/
+clips_cache/
+timeline_cache/
+waveform_cache/
+exports/
+imports_tmp/
