@@ -14,7 +14,7 @@ echo [INFO] Starting server at: http://127.0.0.1:8000
 echo [INFO] Stop server with Ctrl+C
 echo.
 
-call .venv\Scripts\uvicorn.exe app:app --host 127.0.0.1 --port 8000
+call .venv\Scripts\uvicorn.exe app_fixed:app --host 127.0.0.1 --port 8000
 
 echo.
 echo [INFO] Server stopped.
