@@ -122,9 +122,24 @@ button.danger:hover { filter: brightness(1.15); }
 .clip-editor {
   margin-top: 14px;
   padding: 12px;
+  grid-column: 1 / -1;
+  cursor: default;
 }
 .clip-editor h2 { margin: 0 0 2px; }
 .clip-editor .hint { margin: 0 0 10px; }
+.result.active {
+  border-color: #6972cf;
+  background: #151722;
+}
+.advanced-source-picker {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.advanced-source-picker summary {
+  cursor: pointer;
+  margin-bottom: 8px;
+}
 .editor-head {
   display: flex;
   align-items: flex-start;

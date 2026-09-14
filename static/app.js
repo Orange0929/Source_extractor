@@ -28,6 +28,8 @@ const playerTitle = document.getElementById("playerTitle");
 const downloadLink = document.getElementById("downloadLink");
 
 // manual waveform editor
+const clipEditor = document.getElementById("clipEditor");
+const editorClipTitle = document.getElementById("editorClipTitle");
 const sourceAudioSelect = document.getElementById("sourceAudioSelect");
 const btnLoadWaveform = document.getElementById("btnLoadWaveform");
 const waveformStatus = document.getElementById("waveformStatus");
@@ -43,6 +45,7 @@ const rangeStart = document.getElementById("rangeStart");
 const rangeEnd = document.getElementById("rangeEnd");
 const rangeDuration = document.getElementById("rangeDuration");
 const btnPlaySelection = document.getElementById("btnPlaySelection");
+const btnDownloadRange = document.getElementById("btnDownloadRange");
 const loopSelection = document.getElementById("loopSelection");
 const manualTranscript = document.getElementById("manualTranscript");
 const btnSaveManualClip = document.getElementById("btnSaveManualClip");
@@ -69,10 +72,13 @@ let hasMoreResults = false;
 let profileAudios = [];
 let editorAudioId = "";
 let editorDuration = 0;
+let editorViewStart = 0;
+let editorViewEnd = 0;
 let selectionStart = 0;
 let selectionEnd = 1;
 let dragAnchorTime = null;
 let editorLoadToken = 0;
+let activeEditorRow = null;
 
 // job poll timers
 const jobTimers = new Map(); // jobId -> timer
@@ -301,6 +307,9 @@ function updateResultSummary() {
 
 function renderResults(items, append = false) {
   if (!append) {
+    clipEditor.remove();
+    clipEditor.style.display = "none";
+    activeEditorRow = null;
     lastResults = [];
     elResults.innerHTML = "";
   }
@@ -385,20 +394,7 @@ function renderResults(items, append = false) {
       }
     });
 
-    const editBtn = document.createElement("button");
-    editBtn.textContent = "구간 편집";
-    editBtn.className = "ghost notranslate";
-    editBtn.addEventListener("click", async (ev) => {
-      ev.stopPropagation();
-      try {
-        await openClipInEditor(c);
-      } catch (e) {
-        alert(e.message);
-      }
-    });
-
     rightBox.appendChild(right);
-    rightBox.appendChild(editBtn);
     rightBox.appendChild(delBtn);
 
     m.appendChild(left);
@@ -410,13 +406,18 @@ function renderResults(items, append = false) {
     row.appendChild(cb);
     row.appendChild(card);
 
-    row.addEventListener("click", () => {
+    row.addEventListener("click", async () => {
       const url = `/api/clip_audio/${c.id}`;
       playerTitle.textContent = c.transcript || "재생";
       audioPlayer.src = url;
       audioPlayer.play().catch(() => {});
       downloadLink.href = url;
       downloadLink.style.display = "inline";
+      try {
+        await openClipInEditor(c, row);
+      } catch (e) {
+        if (e.message !== "cancelled") alert(e.message);
+      }
     });
 
     elResults.appendChild(row);
@@ -446,22 +447,23 @@ function clamp(value, min, max) {
 }
 
 function updateSelectionUI(scrollIntoView = false) {
-  if (editorDuration <= 0) return;
+  const viewDuration = editorViewEnd - editorViewStart;
+  if (editorDuration <= 0 || viewDuration <= 0) return;
 
-  selectionStart = clamp(selectionStart, 0, editorDuration);
-  selectionEnd = clamp(selectionEnd, 0, editorDuration);
+  selectionStart = clamp(selectionStart, editorViewStart, editorViewEnd);
+  selectionEnd = clamp(selectionEnd, editorViewStart, editorViewEnd);
   if (selectionEnd < selectionStart) {
     [selectionStart, selectionEnd] = [selectionEnd, selectionStart];
   }
   if (selectionEnd - selectionStart < 0.01) {
-    selectionEnd = Math.min(editorDuration, selectionStart + 0.01);
+    selectionEnd = Math.min(editorViewEnd, selectionStart + 0.01);
     if (selectionEnd - selectionStart < 0.01) {
-      selectionStart = Math.max(0, selectionEnd - 0.01);
+      selectionStart = Math.max(editorViewStart, selectionEnd - 0.01);
     }
   }
 
-  const leftPct = (selectionStart / editorDuration) * 100;
-  const widthPct = ((selectionEnd - selectionStart) / editorDuration) * 100;
+  const leftPct = ((selectionStart - editorViewStart) / viewDuration) * 100;
+  const widthPct = ((selectionEnd - selectionStart) / viewDuration) * 100;
   waveSelection.style.left = `${leftPct}%`;
   waveSelection.style.width = `${widthPct}%`;
 
@@ -471,7 +473,7 @@ function updateSelectionUI(scrollIntoView = false) {
 
   if (scrollIntoView) {
     requestAnimationFrame(() => {
-      const leftPx = waveformSurface.offsetWidth * (selectionStart / editorDuration);
+      const leftPx = waveformSurface.offsetWidth * ((selectionStart - editorViewStart) / viewDuration);
       waveformViewport.scrollLeft = Math.max(0, leftPx - waveformViewport.clientWidth * 0.3);
     });
   }
@@ -547,19 +549,47 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
   const token = ++editorLoadToken;
   editorAudioId = audioId;
   editorDuration = 0;
+  editorViewStart = 0;
+  editorViewEnd = 0;
   sourceAudioPlayer.pause();
   waveformViewport.style.display = "none";
   waveformStatus.textContent = "정규화 시간축과 파형을 준비하는 중...";
   btnLoadWaveform.disabled = true;
 
   const mediaReady = waitForMediaMetadata(sourceAudioPlayer, token);
-  const imageReady = waitForImage(waveformImage, token);
   sourceAudioPlayer.src = `/api/audio_source/${encodeURIComponent(audioId)}`;
-  waveformImage.src = `/api/audio_waveform/${encodeURIComponent(audioId)}?width=6000&height=160`;
   sourceAudioPlayer.load();
 
   try {
-    await Promise.all([mediaReady, imageReady]);
+    await mediaReady;
+    if (token !== editorLoadToken) return;
+
+    editorDuration = Number(sourceAudioPlayer.duration || 0);
+    if (!Number.isFinite(editorDuration) || editorDuration <= 0) {
+      throw new Error("원본 길이를 읽지 못했어요.");
+    }
+
+    if (preferredStart != null && preferredEnd != null) {
+      const start = clamp(Number(preferredStart), 0, editorDuration);
+      const end = clamp(Number(preferredEnd), start + 0.01, editorDuration);
+      const selectedLength = Math.max(0.01, end - start);
+      const contextLength = Math.min(editorDuration, Math.max(8, selectedLength * 5));
+      const center = (start + end) / 2;
+      editorViewStart = clamp(center - contextLength / 2, 0, Math.max(0, editorDuration - contextLength));
+      editorViewEnd = Math.min(editorDuration, editorViewStart + contextLength);
+    } else {
+      editorViewStart = 0;
+      editorViewEnd = editorDuration;
+    }
+
+    const imageReady = waitForImage(waveformImage, token);
+    const waveUrl = new URL(`/api/audio_waveform/${encodeURIComponent(audioId)}`, window.location.origin);
+    waveUrl.searchParams.set("width", "6000");
+    waveUrl.searchParams.set("height", "160");
+    waveUrl.searchParams.set("start_s", editorViewStart.toFixed(6));
+    waveUrl.searchParams.set("end_s", editorViewEnd.toFixed(6));
+    waveformImage.src = waveUrl.toString();
+    await imageReady;
   } catch (e) {
     if (e.message !== "cancelled") waveformStatus.textContent = e.message;
     throw e;
@@ -568,19 +598,10 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
   }
 
   if (token !== editorLoadToken) return;
-  editorDuration = Number(sourceAudioPlayer.duration || 0);
-  if (!Number.isFinite(editorDuration) || editorDuration <= 0) {
-    throw new Error("원본 길이를 읽지 못했어요.");
-  }
-
   waveformViewport.style.display = "block";
-  waveformStatus.textContent = `전체 ${formatTime(editorDuration)} · 파형을 드래그해 범위를 선택하세요.`;
+  waveformStatus.textContent = `원본 ${formatTime(editorDuration)} · 표시 구간 ${formatTime(editorViewStart)}–${formatTime(editorViewEnd)}`;
   manualTranscript.value = transcript || "";
-  if (preferredStart != null && preferredEnd != null) {
-    const selectedLength = Math.max(0.01, Number(preferredEnd) - Number(preferredStart));
-    const suggestedZoom = clamp(Math.ceil(editorDuration / (selectedLength * 5)), 1, 40);
-    waveZoom.value = String(suggestedZoom);
-  }
+  waveZoom.value = "1";
   applyWaveZoom();
 
   const start = preferredStart == null ? 0 : Number(preferredStart);
@@ -588,17 +609,27 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
   setSelection(start, end, true);
 }
 
-async function openClipInEditor(clip) {
+async function openClipInEditor(clip, row) {
+  if (activeEditorRow && activeEditorRow !== row) activeEditorRow.classList.remove("active");
+  activeEditorRow = row;
+  row.classList.add("active");
+  row.appendChild(clipEditor);
+  clipEditor.style.display = "block";
+  editorClipTitle.textContent = clip.transcript || "(텍스트 없음)";
   await refreshAudios(clip.audio_id);
   sourceAudioSelect.value = clip.audio_id;
-  document.querySelector(".clip-editor")?.scrollIntoView({ behavior: "smooth", block: "start" });
   await loadWaveform(clip.audio_id, clip.start_s, clip.end_s, clip.transcript || "");
 }
 
 function pointerTime(ev) {
   const rect = waveformSurface.getBoundingClientRect();
-  if (!rect.width || editorDuration <= 0) return 0;
-  return clamp(((ev.clientX - rect.left) / rect.width) * editorDuration, 0, editorDuration);
+  const viewDuration = editorViewEnd - editorViewStart;
+  if (!rect.width || viewDuration <= 0) return editorViewStart;
+  return clamp(
+    editorViewStart + ((ev.clientX - rect.left) / rect.width) * viewDuration,
+    editorViewStart,
+    editorViewEnd
+  );
 }
 
 let dragMode = "";
@@ -616,7 +647,7 @@ waveformSurface.addEventListener("pointerdown", (ev) => {
   } else {
     dragMode = "new";
     dragAnchorTime = t;
-    setSelection(t, Math.min(editorDuration, t + 0.01));
+    setSelection(t, Math.min(editorViewEnd, t + 0.01));
   }
 });
 
@@ -638,9 +669,13 @@ waveformSurface.addEventListener("pointerup", finishWaveDrag);
 waveformSurface.addEventListener("pointercancel", finishWaveDrag);
 
 sourceAudioPlayer.addEventListener("timeupdate", () => {
-  if (editorDuration > 0) {
-    const pct = clamp(sourceAudioPlayer.currentTime / editorDuration, 0, 1) * 100;
+  const viewDuration = editorViewEnd - editorViewStart;
+  if (viewDuration > 0 && sourceAudioPlayer.currentTime >= editorViewStart && sourceAudioPlayer.currentTime <= editorViewEnd) {
+    wavePlayhead.style.display = "block";
+    const pct = clamp((sourceAudioPlayer.currentTime - editorViewStart) / viewDuration, 0, 1) * 100;
     wavePlayhead.style.left = `${pct}%`;
+  } else {
+    wavePlayhead.style.display = "none";
   }
   if (!sourceAudioPlayer.paused && sourceAudioPlayer.currentTime >= selectionEnd - 0.005) {
     if (loopSelection.checked) {
@@ -658,7 +693,10 @@ rangeEnd.addEventListener("change", () => setSelection(selectionStart, Number(ra
 waveZoom.addEventListener("input", applyWaveZoom);
 
 btnLoadWaveform.addEventListener("click", async () => {
-  try { await loadWaveform(sourceAudioSelect.value); }
+  try {
+    editorClipTitle.textContent = "원본 전체에서 직접 추출";
+    await loadWaveform(sourceAudioSelect.value);
+  }
   catch (e) { if (e.message !== "cancelled") alert(e.message); }
 });
 
@@ -667,6 +705,23 @@ btnPlaySelection.addEventListener("click", () => {
   sourceAudioPlayer.currentTime = selectionStart;
   sourceAudioPlayer.play().catch(() => {});
 });
+
+btnDownloadRange.addEventListener("click", () => {
+  if (!editorAudioId || editorDuration <= 0) return alert("파형을 먼저 불러오세요.");
+  if (selectionEnd - selectionStart < 0.01) return alert("받을 구간을 드래그해서 선택하세요.");
+  const url = new URL(`/api/audio_range/${encodeURIComponent(editorAudioId)}`, window.location.origin);
+  url.searchParams.set("start_s", selectionStart.toFixed(6));
+  url.searchParams.set("end_s", selectionEnd.toFixed(6));
+  url.searchParams.set("filename", manualTranscript.value || "선택 구간");
+  const link = document.createElement("a");
+  link.href = url.toString();
+  link.download = "";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+});
+
+clipEditor.addEventListener("click", (ev) => ev.stopPropagation());
 
 btnSaveManualClip.addEventListener("click", async () => {
   const pid = currentProfileId();

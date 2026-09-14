@@ -1005,7 +1005,13 @@ def api_audio_source(audio_id: str):
 
 
 @app.get("/api/audio_waveform/{audio_id}")
-def api_audio_waveform(audio_id: str, width: int = 4000, height: int = 160):
+def api_audio_waveform(
+    audio_id: str,
+    width: int = 4000,
+    height: int = 160,
+    start_s: Optional[float] = None,
+    end_s: Optional[float] = None,
+):
     width = min(8000, max(800, int(width)))
     height = min(360, max(80, int(height)))
     audio, src = _find_audio(audio_id)
@@ -1014,19 +1020,35 @@ def api_audio_waveform(audio_id: str, width: int = 4000, height: int = 160):
     if not src or not src.exists():
         return JSONResponse({"error": "원본 파일이 없어요."}, status_code=404)
 
-    cache_path = WAVEFORM_DIR / f"{audio_id}_{width}x{height}.png"
+    duration = ffprobe_duration(src)
+    view_start = 0.0 if start_s is None else float(start_s)
+    view_end = duration if end_s is None else float(end_s)
+    if not math.isfinite(view_start) or not math.isfinite(view_end):
+        return JSONResponse({"error": "올바른 파형 구간을 입력하세요."}, status_code=400)
+    view_start = max(0.0, view_start)
+    if duration > 0:
+        view_end = min(view_end, duration)
+    if view_end - view_start < 0.01:
+        return JSONResponse({"error": "파형 구간은 최소 0.01초여야 해요."}, status_code=400)
+
+    start_us = round(view_start * 1_000_000)
+    end_us = round(view_end * 1_000_000)
+    cache_path = WAVEFORM_DIR / f"{audio_id}_{start_us}_{end_us}_{width}x{height}.png"
     if not cache_path.exists() or cache_path.stat().st_size == 0:
         tmp = cache_path.with_name(f".{cache_path.stem}.{uuid.uuid4().hex}.tmp.png")
         try:
-            subprocess.check_call([
+            command = [
                 "ffmpeg", "-y",
                 "-hide_banner", "-loglevel", "error",
+                "-ss", f"{view_start:.6f}",
                 "-i", str(src),
+                "-t", f"{view_end - view_start:.6f}",
                 "-filter_complex",
                 f"aformat=channel_layouts=mono,showwavespic=s={width}x{height}:colors=0x8391ff:draw=full",
                 "-frames:v", "1",
                 str(tmp),
-            ])
+            ]
+            subprocess.check_call(command)
             tmp.replace(cache_path)
         except subprocess.CalledProcessError as exc:
             return JSONResponse({"error": f"파형 생성 실패: {exc}"}, status_code=500)
@@ -1034,6 +1056,40 @@ def api_audio_waveform(audio_id: str, width: int = 4000, height: int = 160):
             tmp.unlink(missing_ok=True)
 
     return FileResponse(cache_path, media_type="image/png")
+
+
+@app.get("/api/audio_range/{audio_id}")
+def api_audio_range(audio_id: str, start_s: float, end_s: float, filename: str = "선택 구간"):
+    audio, _ = _find_audio(audio_id)
+    if not audio:
+        return JSONResponse({"error": "원본 오디오를 찾을 수 없어요."}, status_code=404)
+
+    src = UPLOAD_DIR / str(audio.get("path") or "")
+    if not src.exists():
+        return JSONResponse({"error": "원본 파일이 없어요."}, status_code=404)
+    if not math.isfinite(start_s) or not math.isfinite(end_s):
+        return JSONResponse({"error": "올바른 시작/끝 시간을 입력하세요."}, status_code=400)
+
+    start_s = max(0.0, float(start_s))
+    duration = ffprobe_duration(audio_timeline_source(src))
+    if duration > 0:
+        end_s = min(float(end_s), duration)
+    if end_s - start_s < 0.01:
+        return JSONResponse({"error": "구간 길이는 최소 0.01초여야 해요."}, status_code=400)
+
+    cache_path = CACHE_DIR / f"range_{audio_id}_{start_s:.6f}_{end_s:.6f}.wav"
+    if not cache_path.exists() or cache_path.stat().st_size == 0:
+        tmp = cache_path.with_name(f".{cache_path.stem}.{uuid.uuid4().hex}.tmp.wav")
+        try:
+            extract_clip(src, start_s, end_s, tmp)
+            tmp.replace(cache_path)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            return JSONResponse({"error": f"ffmpeg 실패: {exc}"}, status_code=500)
+        finally:
+            tmp.unlink(missing_ok=True)
+
+    safe_base = make_safe_filename(filename, fallback="선택 구간", max_len=80)
+    return FileResponse(cache_path, media_type="audio/wav", filename=f"{safe_base}.wav")
 
 
 # =========================
