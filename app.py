@@ -598,11 +598,18 @@ def score_contains(needle: str, hay: str) -> int:
 # =========================
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    return templates.TemplateResponse(
+    static_files = (BASE_DIR / "static" / "style.css", BASE_DIR / "static" / "app.js")
+    asset_version = max((path.stat().st_mtime_ns for path in static_files), default=0)
+    response = templates.TemplateResponse(
         request=request,
         name="index.html",
-        context={}
+        context={"asset_version": asset_version}
     )
+    # The HTML must always point at the current JS/CSS pair. Otherwise a browser
+    # can combine a newly updated template with an old cached script, leaving
+    # newly added controls visible but non-functional.
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # =========================
