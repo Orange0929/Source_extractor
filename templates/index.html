@@ -115,11 +115,11 @@
         체크한 클립은 각각의 WAV 파일로 잘라 ZIP 하나로 받을 수 있습니다.
       </p>
 
-      <div class="clip-editor card-inner">
+      <div id="clipEditor" class="clip-editor card-inner" style="display:none;">
         <div class="editor-head">
           <div>
-            <h2 class="notranslate">직접 구간 추출</h2>
-            <p class="hint notranslate">파형을 드래그해서 원하는 범위를 선택하세요.</p>
+            <h2 id="editorClipTitle" class="notranslate">직접 구간 추출</h2>
+            <p class="hint notranslate">파형을 드래그한 뒤 선택한 부분을 바로 WAV로 받으세요.</p>
           </div>
           <label class="zoom-label notranslate">
             확대
@@ -128,10 +128,13 @@
           </label>
         </div>
 
-        <div class="row">
-          <select id="sourceAudioSelect" class="notranslate"></select>
-          <button id="btnLoadWaveform" class="notranslate" type="button">파형 불러오기</button>
-        </div>
+        <details class="advanced-source-picker">
+          <summary class="notranslate">다른 원본의 전체 파형 열기</summary>
+          <div class="row">
+            <select id="sourceAudioSelect" class="notranslate"></select>
+            <button id="btnLoadWaveform" class="notranslate" type="button">전체 파형 불러오기</button>
+          </div>
+        </details>
 
         <div id="waveformStatus" class="hint notranslate">원본 오디오를 선택하세요.</div>
         <div id="waveformViewport" class="waveform-viewport" style="display:none;">
@@ -155,6 +158,7 @@
 
         <div class="row editor-actions">
           <button id="btnPlaySelection" class="ghost notranslate" type="button">선택 구간 재생</button>
+          <button id="btnDownloadRange" class="notranslate" type="button">선택 구간 WAV 받기</button>
           <label class="check-label notranslate"><input id="loopSelection" type="checkbox" checked /> 반복</label>
         </div>
 
