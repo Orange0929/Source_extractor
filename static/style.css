@@ -131,14 +131,26 @@ button.danger:hover { filter: brightness(1.15); }
   border-color: #6972cf;
   background: #151722;
 }
-.advanced-source-picker {
+.wave-settings {
   margin: 0 0 10px;
   color: var(--muted);
   font-size: 12px;
 }
-.advanced-source-picker summary {
+.wave-settings summary {
   cursor: pointer;
   margin-bottom: 8px;
+}
+.context-setting {
+  align-items: flex-end;
+  margin-bottom: 6px;
+}
+.context-setting label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.context-setting input {
+  width: 86px;
 }
 .editor-head {
   display: flex;
