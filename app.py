@@ -1066,7 +1066,13 @@ def api_audio_waveform(
 
 
 @app.get("/api/audio_range/{audio_id}")
-def api_audio_range(audio_id: str, start_s: float, end_s: float, filename: str = "선택 구간"):
+def api_audio_range(
+    audio_id: str,
+    start_s: float,
+    end_s: float,
+    filename: str = "선택 구간",
+    download: bool = True,
+):
     audio, _ = _find_audio(audio_id)
     if not audio:
         return JSONResponse({"error": "원본 오디오를 찾을 수 없어요."}, status_code=404)
@@ -1095,8 +1101,10 @@ def api_audio_range(audio_id: str, start_s: float, end_s: float, filename: str =
         finally:
             tmp.unlink(missing_ok=True)
 
-    safe_base = make_safe_filename(filename, fallback="선택 구간", max_len=80)
-    return FileResponse(cache_path, media_type="audio/wav", filename=f"{safe_base}.wav")
+    if download:
+        safe_base = make_safe_filename(filename, fallback="선택 구간", max_len=80)
+        return FileResponse(cache_path, media_type="audio/wav", filename=f"{safe_base}.wav")
+    return FileResponse(cache_path, media_type="audio/wav")
 
 
 # =========================

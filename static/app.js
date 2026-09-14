@@ -31,6 +31,7 @@ const downloadLink = document.getElementById("downloadLink");
 const clipEditor = document.getElementById("clipEditor");
 const editorClipTitle = document.getElementById("editorClipTitle");
 const waveContextSeconds = document.getElementById("waveContextSeconds");
+const waveContextSummary = document.getElementById("waveContextSummary");
 const btnApplyWaveSettings = document.getElementById("btnApplyWaveSettings");
 const sourceAudioSelect = document.getElementById("sourceAudioSelect");
 const btnLoadWaveform = document.getElementById("btnLoadWaveform");
@@ -89,6 +90,7 @@ const savedWaveContext = Number(savedWaveContextRaw);
 waveContextSeconds.value = savedWaveContextRaw !== null && Number.isFinite(savedWaveContext)
   ? String(Math.min(30, Math.max(0, savedWaveContext)))
   : "2";
+waveContextSummary.textContent = `현재: 앞뒤 ${waveContextSeconds.value}초`;
 
 // job poll timers
 const jobTimers = new Map(); // jobId -> timer
@@ -495,6 +497,17 @@ function setSelection(start, end, scrollIntoView = false) {
   updateSelectionUI(scrollIntoView);
 }
 
+function loadSelectionPreview() {
+  if (!editorAudioId || selectionEnd - selectionStart < 0.01) return;
+  sourceAudioPlayer.pause();
+  const previewUrl = new URL(`/api/audio_range/${encodeURIComponent(editorAudioId)}`, window.location.origin);
+  previewUrl.searchParams.set("start_s", selectionStart.toFixed(6));
+  previewUrl.searchParams.set("end_s", selectionEnd.toFixed(6));
+  previewUrl.searchParams.set("download", "false");
+  sourceAudioPlayer.src = previewUrl.toString();
+  sourceAudioPlayer.load();
+}
+
 function applyWaveZoom() {
   const zoom = Number(waveZoom.value || 1);
   waveZoomValue.textContent = `${zoom}x`;
@@ -607,10 +620,11 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
 
   if (token !== editorLoadToken) return;
   waveformViewport.style.display = "block";
-  const contextLabel = preferredStart == null
-    ? "원본 전체 표시"
-    : `대사 앞뒤 ${Number(waveContextSeconds.value || 0)}초 표시`;
-  waveformStatus.textContent = `${contextLabel} · ${formatTime(editorViewStart)}–${formatTime(editorViewEnd)} (원본 ${formatTime(editorDuration)})`;
+  const selectedLength = Math.max(0, Number(preferredEnd) - Number(preferredStart));
+  const visibleLength = editorViewEnd - editorViewStart;
+  waveformStatus.textContent = preferredStart == null
+    ? `원본 전체 ${formatTime(editorDuration)} 표시 중`
+    : `파형 ${visibleLength.toFixed(3)}초만 표시 중 · Whisper ${selectedLength.toFixed(3)}초 + 앞뒤 최대 ${Number(waveContextSeconds.value || 0)}초`;
   manualTranscript.value = transcript || "";
   waveZoom.value = "1";
   applyWaveZoom();
@@ -618,6 +632,7 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
   const start = preferredStart == null ? 0 : Number(preferredStart);
   const end = preferredEnd == null ? Math.min(editorDuration, start + 1) : Number(preferredEnd);
   setSelection(start, end, true);
+  loadSelectionPreview();
 }
 
 async function openClipInEditor(clip, row) {
@@ -653,6 +668,7 @@ let dragMode = "";
 waveformSurface.addEventListener("pointerdown", (ev) => {
   if (editorDuration <= 0) return;
   ev.preventDefault();
+  sourceAudioPlayer.pause();
   waveformSurface.setPointerCapture(ev.pointerId);
   const t = pointerTime(ev);
   if (ev.target.classList.contains("left")) {
@@ -681,32 +697,35 @@ function finishWaveDrag(ev) {
   try { waveformSurface.releasePointerCapture(ev.pointerId); } catch (e) {}
   dragMode = "";
   dragAnchorTime = null;
+  loadSelectionPreview();
 }
 waveformSurface.addEventListener("pointerup", finishWaveDrag);
 waveformSurface.addEventListener("pointercancel", finishWaveDrag);
 
 sourceAudioPlayer.addEventListener("timeupdate", () => {
   const viewDuration = editorViewEnd - editorViewStart;
-  if (viewDuration > 0 && sourceAudioPlayer.currentTime >= editorViewStart && sourceAudioPlayer.currentTime <= editorViewEnd) {
+  if (viewDuration > 0) {
     wavePlayhead.style.display = "block";
-    const pct = clamp((sourceAudioPlayer.currentTime - editorViewStart) / viewDuration, 0, 1) * 100;
+    const sourceTime = selectionStart + Number(sourceAudioPlayer.currentTime || 0);
+    const pct = clamp((sourceTime - editorViewStart) / viewDuration, 0, 1) * 100;
     wavePlayhead.style.left = `${pct}%`;
-  } else {
-    wavePlayhead.style.display = "none";
-  }
-  if (!sourceAudioPlayer.paused && sourceAudioPlayer.currentTime >= selectionEnd - 0.005) {
-    if (loopSelection.checked) {
-      sourceAudioPlayer.currentTime = selectionStart;
-      sourceAudioPlayer.play().catch(() => {});
-    } else {
-      sourceAudioPlayer.pause();
-      sourceAudioPlayer.currentTime = selectionEnd;
-    }
   }
 });
 
-rangeStart.addEventListener("change", () => setSelection(Number(rangeStart.value), selectionEnd));
-rangeEnd.addEventListener("change", () => setSelection(selectionStart, Number(rangeEnd.value)));
+sourceAudioPlayer.addEventListener("ended", () => {
+  if (!loopSelection.checked) return;
+  sourceAudioPlayer.currentTime = 0;
+  sourceAudioPlayer.play().catch(() => {});
+});
+
+rangeStart.addEventListener("change", () => {
+  setSelection(Number(rangeStart.value), selectionEnd);
+  loadSelectionPreview();
+});
+rangeEnd.addEventListener("change", () => {
+  setSelection(selectionStart, Number(rangeEnd.value));
+  loadSelectionPreview();
+});
 waveZoom.addEventListener("input", applyWaveZoom);
 
 btnLoadWaveform.addEventListener("click", async () => {
@@ -721,6 +740,7 @@ btnLoadWaveform.addEventListener("click", async () => {
 btnApplyWaveSettings.addEventListener("click", async () => {
   const contextSeconds = clamp(Number(waveContextSeconds.value || 0), 0, 30);
   waveContextSeconds.value = String(contextSeconds);
+  waveContextSummary.textContent = `현재: 앞뒤 ${contextSeconds}초`;
   localStorage.setItem(WAVE_CONTEXT_STORAGE_KEY, String(contextSeconds));
   if (!activeClipBounds) return;
 
@@ -741,7 +761,7 @@ btnApplyWaveSettings.addEventListener("click", async () => {
 
 btnPlaySelection.addEventListener("click", () => {
   if (!editorAudioId || editorDuration <= 0) return alert("파형을 먼저 불러오세요.");
-  sourceAudioPlayer.currentTime = selectionStart;
+  sourceAudioPlayer.currentTime = 0;
   sourceAudioPlayer.play().catch(() => {});
 });
 
