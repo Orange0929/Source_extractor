@@ -133,12 +133,30 @@ button.danger:hover { filter: brightness(1.15); }
 }
 .wave-settings {
   margin: 0 0 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #11131a;
   color: var(--muted);
   font-size: 12px;
 }
 .wave-settings summary {
   cursor: pointer;
-  margin-bottom: 8px;
+  color: #dfe2ff;
+  font-weight: 700;
+}
+.wave-settings[open] summary {
+  margin-bottom: 10px;
+}
+.wave-settings-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.setting-value {
+  color: #8bdcf4;
+  font-weight: 600;
 }
 .context-setting {
   align-items: flex-end;
