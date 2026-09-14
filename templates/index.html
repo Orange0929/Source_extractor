@@ -128,11 +128,19 @@
           </label>
         </div>
 
-        <details class="advanced-source-picker">
-          <summary class="notranslate">다른 원본의 전체 파형 열기</summary>
+        <details class="wave-settings">
+          <summary class="notranslate">파형 설정</summary>
+          <div class="row context-setting">
+            <label class="notranslate">
+              대사 앞뒤 추가 표시
+              <input id="waveContextSeconds" type="number" min="0" max="30" step="0.5" value="2" />초
+            </label>
+            <button id="btnApplyWaveSettings" class="ghost notranslate" type="button">적용</button>
+          </div>
+          <p class="hint notranslate">0초면 Whisper 구간만, 기본값 2초면 대사 앞뒤를 각각 2초씩 보여줍니다.</p>
           <div class="row">
             <select id="sourceAudioSelect" class="notranslate"></select>
-            <button id="btnLoadWaveform" class="notranslate" type="button">전체 파형 불러오기</button>
+            <button id="btnLoadWaveform" class="ghost notranslate" type="button">필요할 때만 원본 전체 열기</button>
           </div>
         </details>
 

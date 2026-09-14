@@ -30,6 +30,8 @@ const downloadLink = document.getElementById("downloadLink");
 // manual waveform editor
 const clipEditor = document.getElementById("clipEditor");
 const editorClipTitle = document.getElementById("editorClipTitle");
+const waveContextSeconds = document.getElementById("waveContextSeconds");
+const btnApplyWaveSettings = document.getElementById("btnApplyWaveSettings");
 const sourceAudioSelect = document.getElementById("sourceAudioSelect");
 const btnLoadWaveform = document.getElementById("btnLoadWaveform");
 const waveformStatus = document.getElementById("waveformStatus");
@@ -79,6 +81,14 @@ let selectionEnd = 1;
 let dragAnchorTime = null;
 let editorLoadToken = 0;
 let activeEditorRow = null;
+let activeClipBounds = null;
+
+const WAVE_CONTEXT_STORAGE_KEY = "sourceExtractor.waveContextSeconds";
+const savedWaveContextRaw = localStorage.getItem(WAVE_CONTEXT_STORAGE_KEY);
+const savedWaveContext = Number(savedWaveContextRaw);
+waveContextSeconds.value = savedWaveContextRaw !== null && Number.isFinite(savedWaveContext)
+  ? String(Math.min(30, Math.max(0, savedWaveContext)))
+  : "2";
 
 // job poll timers
 const jobTimers = new Map(); // jobId -> timer
@@ -572,11 +582,9 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
     if (preferredStart != null && preferredEnd != null) {
       const start = clamp(Number(preferredStart), 0, editorDuration);
       const end = clamp(Number(preferredEnd), start + 0.01, editorDuration);
-      const selectedLength = Math.max(0.01, end - start);
-      const contextLength = Math.min(editorDuration, Math.max(8, selectedLength * 5));
-      const center = (start + end) / 2;
-      editorViewStart = clamp(center - contextLength / 2, 0, Math.max(0, editorDuration - contextLength));
-      editorViewEnd = Math.min(editorDuration, editorViewStart + contextLength);
+      const contextSeconds = clamp(Number(waveContextSeconds.value || 0), 0, 30);
+      editorViewStart = Math.max(0, start - contextSeconds);
+      editorViewEnd = Math.min(editorDuration, end + contextSeconds);
     } else {
       editorViewStart = 0;
       editorViewEnd = editorDuration;
@@ -599,7 +607,10 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
 
   if (token !== editorLoadToken) return;
   waveformViewport.style.display = "block";
-  waveformStatus.textContent = `원본 ${formatTime(editorDuration)} · 표시 구간 ${formatTime(editorViewStart)}–${formatTime(editorViewEnd)}`;
+  const contextLabel = preferredStart == null
+    ? "원본 전체 표시"
+    : `대사 앞뒤 ${Number(waveContextSeconds.value || 0)}초 표시`;
+  waveformStatus.textContent = `${contextLabel} · ${formatTime(editorViewStart)}–${formatTime(editorViewEnd)} (원본 ${formatTime(editorDuration)})`;
   manualTranscript.value = transcript || "";
   waveZoom.value = "1";
   applyWaveZoom();
@@ -616,6 +627,12 @@ async function openClipInEditor(clip, row) {
   row.appendChild(clipEditor);
   clipEditor.style.display = "block";
   editorClipTitle.textContent = clip.transcript || "(텍스트 없음)";
+  activeClipBounds = {
+    audioId: clip.audio_id,
+    start: Number(clip.start_s),
+    end: Number(clip.end_s),
+    transcript: clip.transcript || ""
+  };
   await refreshAudios(clip.audio_id);
   sourceAudioSelect.value = clip.audio_id;
   await loadWaveform(clip.audio_id, clip.start_s, clip.end_s, clip.transcript || "");
@@ -694,10 +711,32 @@ waveZoom.addEventListener("input", applyWaveZoom);
 
 btnLoadWaveform.addEventListener("click", async () => {
   try {
+    activeClipBounds = null;
     editorClipTitle.textContent = "원본 전체에서 직접 추출";
     await loadWaveform(sourceAudioSelect.value);
   }
   catch (e) { if (e.message !== "cancelled") alert(e.message); }
+});
+
+btnApplyWaveSettings.addEventListener("click", async () => {
+  const contextSeconds = clamp(Number(waveContextSeconds.value || 0), 0, 30);
+  waveContextSeconds.value = String(contextSeconds);
+  localStorage.setItem(WAVE_CONTEXT_STORAGE_KEY, String(contextSeconds));
+  if (!activeClipBounds) return;
+
+  btnApplyWaveSettings.disabled = true;
+  try {
+    await loadWaveform(
+      activeClipBounds.audioId,
+      activeClipBounds.start,
+      activeClipBounds.end,
+      activeClipBounds.transcript
+    );
+  } catch (e) {
+    if (e.message !== "cancelled") alert(e.message);
+  } finally {
+    btnApplyWaveSettings.disabled = false;
+  }
 });
 
 btnPlaySelection.addEventListener("click", () => {
