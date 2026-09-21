@@ -71,7 +71,7 @@ async function loadPitch(token) {
     if (token !== editorLoadToken || request !== pitchRequest) return;
     audioPlot.points = data.points; audioPlot.draw();
     pitchStatus.textContent = data.points.some(p => p[1] != null)
-      ? "노란 선: 피치 · C4 = 가운데 도 · 무성음/불확실한 구간은 끊어서 표시 · 배경음이 있으면 오차 가능"
+      ? "노란 선: FCPE 피치 · C4 = 가운데 도 · 무성음/불확실한 구간은 끊어서 표시 · 배경음이 있으면 오차 가능"
       : "이 구간에서는 신뢰할 수 있는 피치를 찾지 못했어요.";
   } catch (e) {
     if (token === editorLoadToken && request === pitchRequest && e.name !== "AbortError") pitchStatus.textContent = e.message;
