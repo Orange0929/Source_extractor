@@ -10,6 +10,8 @@ import zipfile
 import shutil
 import mimetypes
 import math
+import hashlib
+from audio_analysis import read_audio, envelope, pitch
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
@@ -598,7 +600,7 @@ def score_contains(needle: str, hay: str) -> int:
 # =========================
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    static_files = (BASE_DIR / "static" / "style.css", BASE_DIR / "static" / "app.js")
+    static_files = tuple(BASE_DIR / "static" / name for name in ("style.css", "app.js", "audio_plot.js"))
     asset_version = max((path.stat().st_mtime_ns for path in static_files), default=0)
     response = templates.TemplateResponse(
         request=request,
@@ -1009,6 +1011,47 @@ def api_audio_source(audio_id: str):
         return JSONResponse({"error": "원본 파일이 없어요."}, status_code=404)
     media_type = mimetypes.guess_type(src.name)[0] or "application/octet-stream"
     return FileResponse(src, media_type=media_type)
+
+
+_analysis_lock = threading.Semaphore(1)
+
+
+@app.get("/api/audio_analysis/{audio_id}")
+def api_audio_analysis(audio_id: str, start_s: float, end_s: float, kind: str = "waveform"):
+    if kind not in ("waveform", "pitch"):
+        return JSONResponse({"error": "알 수 없는 분석 종류예요."}, status_code=400)
+    if not math.isfinite(start_s) or not math.isfinite(end_s):
+        return JSONResponse({"error": "올바른 구간을 입력하세요."}, status_code=400)
+    audio, src = _find_audio(audio_id)
+    if not audio or not src or not src.exists():
+        return JSONResponse({"error": "원본 오디오를 찾을 수 없어요."}, status_code=404)
+    duration = ffprobe_duration(src)
+    start_s, end_s = max(0.0, start_s), min(duration, end_s)
+    limit = 90 if kind == "pitch" else 1800
+    if not 0.01 <= end_s - start_s <= limit:
+        return JSONResponse({"error": f"{limit}초 이내 구간을 열어 주세요."}, status_code=400)
+    stat = src.stat()
+    key = hashlib.sha256(f"analysis-v1|{src}|{stat.st_size}|{stat.st_mtime_ns}|{start_s:.6f}|{end_s:.6f}|{kind}".encode()).hexdigest()
+    cache = WAVEFORM_DIR / f"{key}.json"
+    if cache.exists():
+        return FileResponse(cache, media_type="application/json")
+    if not _analysis_lock.acquire(blocking=False):
+        return JSONResponse({"error": "다른 구간 분석 중이에요. 잠시 후 다시 시도해 주세요."}, status_code=429)
+    tmp = cache.with_name(f".{key}.{uuid.uuid4().hex}.tmp")
+    try:
+        samples = read_audio(src, start_s, end_s)
+        result = pitch(samples, start_s) if kind == "pitch" else envelope(samples)
+        result.update(start=start_s, end=end_s)
+        tmp.write_text(json.dumps(result, allow_nan=False), encoding="utf-8")
+        tmp.replace(cache)
+        return FileResponse(cache, media_type="application/json")
+    except ImportError:
+        return JSONResponse({"error": "피치 분석 설치가 필요해요. install_windows.bat을 실행해 주세요."}, status_code=503)
+    except (subprocess.SubprocessError, ValueError) as exc:
+        return JSONResponse({"error": f"분석 실패: {exc}"}, status_code=500)
+    finally:
+        tmp.unlink(missing_ok=True)
+        _analysis_lock.release()
 
 
 @app.get("/api/audio_waveform/{audio_id}")

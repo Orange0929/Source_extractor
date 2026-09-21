@@ -349,3 +349,13 @@ button.danger:hover { filter: brightness(1.15); }
   white-space:nowrap;
 }
 .filebtn input{ display:none; }
+
+/* Shared time axis: waveform, pitch and selection remain aligned. */
+.waveform-surface { height: 390px; }
+#waveformCanvas { position: sticky; left: 0; display: block; pointer-events: none; }
+.wave-selection { background: rgba(100, 174, 255, .08); border-color: #e5f9ff; }
+.selection-handle { background: rgba(229,249,255,.12); }
+.plot-controls { align-items: center; justify-content: space-between; }
+.plot-controls label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.plot-controls input[type=range] { width: 100px; padding: 0; }
+#pitchStatus { margin: 5px 0; color: #eed28b; }
