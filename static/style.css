@@ -351,7 +351,7 @@ button.danger:hover { filter: brightness(1.15); }
 .filebtn input{ display:none; }
 
 /* Shared time axis: waveform, pitch and selection remain aligned. */
-.waveform-surface { height: 390px; }
+.waveform-surface { height: 215px; }
 #waveformCanvas { position: sticky; left: 0; display: block; pointer-events: none; }
 .wave-selection { background: rgba(100, 174, 255, .08); border-color: #e5f9ff; }
 .selection-handle { background: rgba(229,249,255,.12); }
