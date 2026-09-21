@@ -28,22 +28,45 @@ def envelope(samples, bins=16000):
             'rms': np.round(rms, 5).tolist(), 'gain': gain}
 
 
+_fcpe_model = None
+
+
+def _get_fcpe():
+    global _fcpe_model
+    if _fcpe_model is None:
+        import torch
+        from torchfcpe import spawn_bundled_infer_model
+        # CPU is predictable on Windows without a separate CUDA installation.
+        torch.set_num_threads(min(4, torch.get_num_threads()))
+        _fcpe_model = spawn_bundled_infer_model(device="cpu")
+        _fcpe_model.eval()
+    return _fcpe_model
+
+
 def pitch(samples, start):
-    import librosa
+    import torch
     if len(samples) < 1024 or np.max(np.abs(samples)) < 0.0001:
-        return {'points': [], 'method': 'pYIN'}
-    hop = 320  # 20ms; timestamps use centered frames, same origin as waveform.
-    f0, voiced, probability = librosa.pyin(
-        samples, sr=RATE, fmin=65.4, fmax=1046.5,
-        frame_length=1024, hop_length=hop, fill_na=np.nan,
-    )
-    rms = librosa.feature.rms(y=samples, frame_length=1024, hop_length=hop)[0]
-    floor = max(0.0001, float(np.max(rms)) * 0.015)
+        return {"points": [], "method": "FCPE"}
+    model = _get_fcpe()
+    frame_seconds = model.get_hop_size() / model.get_model_sr()
+    # Use native frame spacing: stretching outputs to the requested duration
+    # would shift the curve on clips whose length is not a hop-size multiple.
+    waveform = torch.from_numpy(np.asarray(samples, dtype=np.float32).copy()).reshape(1, -1, 1)
+    with torch.inference_mode():
+        frequencies = model.infer(
+            waveform, sr=RATE, decoder_mode="local_argmax",
+            threshold=0.006, interp_uv=False,
+        ).reshape(-1).cpu().numpy()
     points = []
-    for i, hz in enumerate(f0):
-        relative = i * hop / RATE
+    for i, hz in enumerate(frequencies):
+        relative = i * frame_seconds
         if relative >= len(samples) / RATE:
             break
-        valid = bool(voiced[i] and np.isfinite(hz) and probability[i] >= 0.15 and rms[i] > floor)
-        points.append([round(start + relative, 6), round(float(hz), 3) if valid else None])
-    return {'points': points, 'method': 'pYIN'}
+        # An absolute silence gate; do not suppress quiet endings relative to
+        # the loudest syllable, or interpolate through unvoiced consonants.
+        center = round(relative * RATE)
+        window = samples[max(0, center-160):min(len(samples), center+161)]
+        audible = len(window) and float(np.sqrt(np.mean(window ** 2))) > 0.0001
+        valid = np.isfinite(hz) and hz > 0 and audible
+        points.append([round(start+relative, 6), round(float(hz), 3) if valid else None])
+    return {"points": points, "method": "FCPE"}

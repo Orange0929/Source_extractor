@@ -11,7 +11,9 @@ class AudioAnalysisTests(unittest.TestCase):
         t = np.arange(RATE) / RATE
         audio = np.concatenate([.2*np.sin(2*np.pi*220*t), np.zeros(RATE//2),
                                 .1*np.sin(2*np.pi*440*t)]).astype(np.float32)
-        points = pitch(audio, 104.26)['points']
+        result = pitch(audio, 104.26)
+        self.assertEqual(result['method'], 'FCPE')
+        points = result['points']
         for start, end, expected in [(104.4,105.0,220), (105.9,106.6,440)]:
             values = [hz for at,hz in points if start < at < end and hz]
             self.assertTrue(values)
@@ -27,6 +29,23 @@ class AudioAnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(result['peaks'][-1], .4, places=5)
         self.assertTrue(all(x == 0 for x in result['peaks'][:-1]))
         self.assertLessEqual(max(result['peaks'])*result['gain'], .901)
+
+    def test_postprocessing_does_not_relative_gate_quiet_ending(self):
+        t = np.arange(RATE) / RATE
+        audio = np.concatenate([.4*np.sin(2*np.pi*220*t),
+                                .004*np.sin(2*np.pi*220*t)]).astype(np.float32)
+        # Isolate postprocessing: a model-confirmed quiet ending must survive.
+        from unittest.mock import patch, Mock
+        import torch
+        model = Mock()
+        model.get_hop_size.return_value = 160
+        model.get_model_sr.return_value = 16000
+        model.infer.return_value = torch.full((1, 201, 1), 220.0)
+        with patch('audio_analysis._get_fcpe', return_value=model):
+            points = pitch(audio, 0)['points']
+        ending = [hz for at,hz in points if 1.2 < at < 1.8 and hz]
+        self.assertTrue(ending)
+        self.assertLess(abs(float(np.median(ending))-220), 4)
 
     def test_silence(self):
         self.assertEqual(pitch(np.zeros(RATE), 0)['points'], [])

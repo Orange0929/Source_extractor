@@ -37,6 +37,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo [INFO] Installing CPU pitch runtime... >> "%LOG%"
+call .venv\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu 1>>"%LOG%" 2>>&1
+if errorlevel 1 (
+  echo [ERROR] Pitch runtime installation failed. See install_log.txt
+  pause
+  exit /b 1
+)
+
 echo [INFO] Installing requirements... >> "%LOG%"
 call .venv\Scripts\pip.exe install -r requirements.txt 1>>"%LOG%" 2>>&1
 set RC=%errorlevel%

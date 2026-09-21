@@ -1031,7 +1031,7 @@ def api_audio_analysis(audio_id: str, start_s: float, end_s: float, kind: str = 
     if not 0.01 <= end_s - start_s <= limit:
         return JSONResponse({"error": f"{limit}초 이내 구간을 열어 주세요."}, status_code=400)
     stat = src.stat()
-    key = hashlib.sha256(f"analysis-v1|{src}|{stat.st_size}|{stat.st_mtime_ns}|{start_s:.6f}|{end_s:.6f}|{kind}".encode()).hexdigest()
+    key = hashlib.sha256(f"analysis-fcpe-v1|{src}|{stat.st_size}|{stat.st_mtime_ns}|{start_s:.6f}|{end_s:.6f}|{kind}".encode()).hexdigest()
     cache = WAVEFORM_DIR / f"{key}.json"
     if cache.exists():
         return FileResponse(cache, media_type="application/json")
@@ -1047,7 +1047,7 @@ def api_audio_analysis(audio_id: str, start_s: float, end_s: float, kind: str = 
         return FileResponse(cache, media_type="application/json")
     except ImportError:
         return JSONResponse({"error": "피치 분석 설치가 필요해요. install_windows.bat을 실행해 주세요."}, status_code=503)
-    except (subprocess.SubprocessError, ValueError) as exc:
+    except (subprocess.SubprocessError, ValueError, RuntimeError, OSError) as exc:
         return JSONResponse({"error": f"분석 실패: {exc}"}, status_code=500)
     finally:
         tmp.unlink(missing_ok=True)
