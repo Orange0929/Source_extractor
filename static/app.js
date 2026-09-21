@@ -606,7 +606,7 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
     const imageReady = waitForImage(waveformImage, token);
     const waveUrl = new URL(`/api/audio_waveform/${encodeURIComponent(audioId)}`, window.location.origin);
     waveUrl.searchParams.set("width", "6000");
-    waveUrl.searchParams.set("height", "160");
+    waveUrl.searchParams.set("height", "240");
     waveUrl.searchParams.set("start_s", editorViewStart.toFixed(6));
     waveUrl.searchParams.set("end_s", editorViewEnd.toFixed(6));
     waveformImage.src = waveUrl.toString();

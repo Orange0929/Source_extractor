@@ -1015,7 +1015,7 @@ def api_audio_source(audio_id: str):
 def api_audio_waveform(
     audio_id: str,
     width: int = 4000,
-    height: int = 160,
+    height: int = 240,
     start_s: Optional[float] = None,
     end_s: Optional[float] = None,
 ):
@@ -1040,7 +1040,7 @@ def api_audio_waveform(
 
     start_us = round(view_start * 1_000_000)
     end_us = round(view_end * 1_000_000)
-    cache_path = WAVEFORM_DIR / f"{audio_id}_{start_us}_{end_us}_{width}x{height}.png"
+    cache_path = WAVEFORM_DIR / f"readable_v2_{audio_id}_{start_us}_{end_us}_{width}x{height}.png"
     if not cache_path.exists() or cache_path.stat().st_size == 0:
         tmp = cache_path.with_name(f".{cache_path.stem}.{uuid.uuid4().hex}.tmp.png")
         try:
@@ -1051,7 +1051,7 @@ def api_audio_waveform(
                 "-i", str(src),
                 "-t", f"{view_end - view_start:.6f}",
                 "-filter_complex",
-                f"aformat=channel_layouts=mono,showwavespic=s={width}x{height}:colors=0x8391ff:draw=full",
+                f"aformat=channel_layouts=mono,showwavespic=s={width}x{height}:colors=0x9de6ff:scale=sqrt:filter=peak:draw=full",
                 "-frames:v", "1",
                 str(tmp),
             ]
