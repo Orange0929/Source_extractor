@@ -38,7 +38,53 @@ const btnLoadWaveform = document.getElementById("btnLoadWaveform");
 const waveformStatus = document.getElementById("waveformStatus");
 const waveformViewport = document.getElementById("waveformViewport");
 const waveformSurface = document.getElementById("waveformSurface");
-const waveformImage = document.getElementById("waveformImage");
+const audioPlot = new AudioPlot(document.getElementById("waveformCanvas"), waveformViewport, waveformSurface);
+const pitchStatus = document.getElementById("pitchStatus");
+let analysisController = null;
+let pitchRequest = 0;
+async function analysisRequest(kind, token) {
+  const url = new URL(`/api/audio_analysis/${encodeURIComponent(editorAudioId)}`, window.location.origin);
+  url.searchParams.set("kind", kind);
+  url.searchParams.set("start_s", editorViewStart.toFixed(6));
+  url.searchParams.set("end_s", editorViewEnd.toFixed(6));
+  const signal = analysisController.signal;
+  for (let attempt = 0; attempt < 60; attempt++) {
+    if (token !== editorLoadToken || signal.aborted) throw new Error("cancelled");
+    const response = await fetch(url, {signal});
+    if (response.status === 429 && attempt < 59) {
+      await new Promise(resolve => setTimeout(resolve, 1000)); continue;
+    }
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "분석 실패");
+    return data;
+  }
+}
+async function loadPitch(token) {
+  const request = ++pitchRequest;
+  audioPlot.points = []; audioPlot.draw();
+  if (editorViewEnd - editorViewStart > 90) {
+    pitchStatus.textContent = "피치는 90초 이내 대사 구간에서 표시돼요. 대사를 클릭해 주세요."; return;
+  }
+  pitchStatus.textContent = "피치 분석 중… 처음에는 시간이 걸릴 수 있어요. 재생·구간 선택은 가능합니다.";
+  try {
+    const data = await analysisRequest("pitch", token);
+    if (token !== editorLoadToken || request !== pitchRequest) return;
+    audioPlot.points = data.points; audioPlot.draw();
+    pitchStatus.textContent = data.points.some(p => p[1] != null)
+      ? "노란 선: 피치 · C4 = 가운데 도 · 무성음/불확실한 구간은 끊어서 표시 · 배경음이 있으면 오차 가능"
+      : "이 구간에서는 신뢰할 수 있는 피치를 찾지 못했어요.";
+  } catch (e) {
+    if (token === editorLoadToken && request === pitchRequest && e.name !== "AbortError") pitchStatus.textContent = e.message;
+  }
+}
+document.getElementById("waveGain").addEventListener("input", ev => {
+  audioPlot.gain = Number(ev.target.value);
+  document.getElementById("waveGainValue").textContent = audioPlot.gain.toFixed(1) + "×";
+  audioPlot.draw();
+});
+document.getElementById("btnPitch").addEventListener("click", () => {
+  if (editorDuration > 0 && audioPlot.data) loadPitch(editorLoadToken);
+});
 const waveSelection = document.getElementById("waveSelection");
 const wavePlayhead = document.getElementById("wavePlayhead");
 const waveZoom = document.getElementById("waveZoom");
@@ -515,6 +561,7 @@ function applyWaveZoom() {
     ? (waveformViewport.scrollLeft + waveformViewport.clientWidth / 2) / waveformSurface.offsetWidth
     : 0;
   waveformSurface.style.width = `${zoom * 100}%`;
+  audioPlot.draw();
   updateSelectionUI(false);
   requestAnimationFrame(() => {
     if (centerRatio > 0) {
@@ -570,6 +617,10 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
   if (!audioId) throw new Error("원본 오디오를 선택하세요.");
 
   const token = ++editorLoadToken;
+  if (analysisController) analysisController.abort();
+  analysisController = new AbortController();
+  audioPlot.clear();
+  pitchStatus.textContent = "파형을 준비하는 중…";
   editorAudioId = audioId;
   editorDuration = 0;
   editorViewStart = 0;
@@ -603,14 +654,9 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
       editorViewEnd = editorDuration;
     }
 
-    const imageReady = waitForImage(waveformImage, token);
-    const waveUrl = new URL(`/api/audio_waveform/${encodeURIComponent(audioId)}`, window.location.origin);
-    waveUrl.searchParams.set("width", "6000");
-    waveUrl.searchParams.set("height", "240");
-    waveUrl.searchParams.set("start_s", editorViewStart.toFixed(6));
-    waveUrl.searchParams.set("end_s", editorViewEnd.toFixed(6));
-    waveformImage.src = waveUrl.toString();
-    await imageReady;
+    const waveData = await analysisRequest("waveform", token);
+    if (token !== editorLoadToken) return;
+    audioPlot.data = waveData;
   } catch (e) {
     if (e.message !== "cancelled") waveformStatus.textContent = e.message;
     throw e;
@@ -633,6 +679,8 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
   const end = preferredEnd == null ? Math.min(editorDuration, start + 1) : Number(preferredEnd);
   setSelection(start, end, true);
   loadSelectionPreview();
+  audioPlot.draw();
+  loadPitch(token);
 }
 
 async function openClipInEditor(clip, row) {

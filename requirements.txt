@@ -4,3 +4,5 @@ jinja2
 python-multipart
 faster-whisper
 ctranslate2
+numpy
+librosa==0.11.0
