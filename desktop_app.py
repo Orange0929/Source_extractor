@@ -212,9 +212,16 @@ def main():
         api._window = window
         def closing():
             if api._can_close(): return True
-            if os.name=='nt':
-                import ctypes
-                ctypes.windll.user32.MessageBoxW(None,'업로드·분석·다운로드 또는 업데이트가 진행 중입니다. 작업 완료 후 닫아 주세요.','Source Extractor',0x40)
+            # A stalled request or unavailable health endpoint must not trap
+            # the user. This is exit only; restart/update activation still
+            # requires the strict idle gate in restart_app().
+            if window.create_confirmation_dialog('Source Extractor 종료',
+                    '진행 중인 작업이 있거나 서버의 종료 상태를 확인하지 못했습니다.\n'
+                    '지금 종료하면 진행 중인 분석·파일 저장·업데이트 설치가 중단될 수 있습니다.\n'
+                    '그래도 종료하시겠습니까?'):
+                api._restart = False
+                api._closing = True
+                return True
             return False
         window.events.closing += closing
         def load_app():

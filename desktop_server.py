@@ -8,6 +8,18 @@ import subprocess
 import sys
 
 
+def blocks_close(scope):
+    """Protect writes/exports/analysis, not playback streams or UI polling."""
+    if scope.get('type') != 'http':
+        return False
+    path = scope.get('path', '')
+    if not path.startswith('/api/') or path.startswith('/api/desktop/'):
+        return False
+    return (scope.get('method', 'GET') not in ('GET', 'HEAD', 'OPTIONS') or
+            path.startswith(('/api/export/', '/api/clips/bulk_download/',
+                             '/api/audio_analysis/', '/api/audio_waveform/')))
+
+
 def main():
     # ffmpeg children must not flash command windows when launched by pythonw.
     if os.name == 'nt':
@@ -37,7 +49,7 @@ def main():
     async def health(request: core.Request):
         if request.headers.get('X-Desktop-Token') != token:
             return JSONResponse({'error':'Forbidden'}, status_code=403)
-        return {'ok':True, 'busy':busy()}
+        return {'ok':True, 'busy':busy(), 'active_operations':active}
 
     @app.post('/api/desktop/prepare-close')
     async def prepare_close(request: core.Request):
@@ -53,8 +65,9 @@ def main():
         def __init__(self, wrapped): self.app = wrapped
         async def __call__(self, scope, receive, send):
             nonlocal active
-            tracked = scope['type']=='http' and scope['path'].startswith('/api/') and not scope['path'].startswith('/api/desktop/')
-            if tracked and closing:
+            tracked = blocks_close(scope)
+            api_request = scope['type']=='http' and scope['path'].startswith('/api/') and not scope['path'].startswith('/api/desktop/')
+            if api_request and closing:
                 await JSONResponse({'error':'앱을 재시작하는 중입니다.'},status_code=503)(scope,receive,send)
                 return
             if tracked: active += 1
