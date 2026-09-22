@@ -11,6 +11,7 @@ const uploadForm = document.getElementById("uploadForm");
 const elAudioFile = document.getElementById("audioFile");
 
 const elSearchMode = document.getElementById("searchMode");
+const searchModeHelp = document.getElementById("searchModeHelp");
 const elSearchInput = document.getElementById("searchInput");
 const btnSearch = document.getElementById("btnSearch");
 const btnReset = document.getElementById("btnReset");
@@ -161,6 +162,16 @@ let activeEditorRow = null;
 let activeClipBounds = null;
 
 const WAVE_CONTEXT_STORAGE_KEY = "sourceExtractor.waveContextSeconds";
+const SEARCH_MODE_HELP = {
+  basic: "표기 그대로 검색 · 띄어쓰기/기호는 무시하지만 발음 변화나 다른 문자 표기는 변환하지 않습니다.",
+  ko_sound: "한국어의 제한적인 연음·비음화·유음화와 받침 대표음을 적용해 실제 발음에 가깝게 검색합니다.",
+  jp_sound: "가나를 기준으로 검색 · 로마자나 한글 입력은 일본어 가나로 추정 변환합니다.",
+  continuous: "음소열 검색 · u do, 우도, ㅜ도, ㅜㄷㅗ를 같은 연속음으로 취급합니다.",
+};
+function updateSearchModeHelp() {
+  searchModeHelp.textContent = SEARCH_MODE_HELP[elSearchMode.value] || SEARCH_MODE_HELP.basic;
+}
+updateSearchModeHelp();
 const savedWaveContextRaw = localStorage.getItem(WAVE_CONTEXT_STORAGE_KEY);
 const savedWaveContext = Number(savedWaveContextRaw);
 waveContextSeconds.value = savedWaveContextRaw !== null && Number.isFinite(savedWaveContext)
@@ -1277,6 +1288,7 @@ btnReset.addEventListener("click", async () => {
 });
 
 elSearchMode.addEventListener("change", async () => {
+  updateSearchModeHelp();
   selectedClipIds.clear();
   updateBulkDeleteButton();
   try { await doSearch(false); } catch (e) {}
