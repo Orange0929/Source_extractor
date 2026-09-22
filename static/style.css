@@ -383,3 +383,9 @@ button.danger:hover { filter: brightness(1.15); }
 .clip-editor.is-expanded .editor-head { flex-direction: row; flex: 0 0 auto; justify-content: flex-end; }
 .clip-editor.is-expanded .editor-head > div { display: none; }
 .clip-editor.is-expanded .plot-shell { flex: 1; min-height: 0; height: auto; margin-bottom: 0; }
+
+.wave-ruler { position: absolute; inset: 0 0 auto; height: 22px; z-index: 3; cursor: text; background: rgba(107,153,195,.05); }
+.wave-ruler:hover { background: rgba(107,153,195,.16); }
+.wave-playhead { z-index: 4; width: 2px; background: #ffdf71; }
+.wave-playhead::before { content: ""; position: absolute; top: 0; left: -5px; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 9px solid #ffdf71; }
+.wave-selection { top: 22px; }
