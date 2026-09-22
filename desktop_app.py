@@ -1,6 +1,7 @@
 """Windows WebView2 host with a narrow local-only update bridge."""
 from __future__ import annotations
 import json
+import logging
 import os
 from pathlib import Path
 import platform
@@ -23,6 +24,7 @@ class DesktopApi:
         self._window = None; self._restart = False; self._closing = False; self._process = None
         self._lock = threading.Lock(); self._status_lock = threading.Lock()
         self._latest = None
+        self._close_reason = ''
         pending = read_state(root).get('pending')
         if pending and pending.get('sha') == os.environ.get('SOURCE_EXTRACTOR_REVISION'):
             pending = None
@@ -149,24 +151,37 @@ class DesktopApi:
 
     def _can_close(self):
         if self._closing: return True
-        if not self._lock.acquire(blocking=False): return False
+        self._close_reason = ''
+        if not self._lock.acquire(blocking=False):
+            with self._status_lock:
+                message = self._status.get('message') or '업데이트 상태 변경 중'
+            return self._block_close('업데이트 작업: ' + message)
         try:
             try:
-                if not self._server('POST')['ok']: return False
-            except Exception:
+                result = self._server('POST')
+                if not result['ok']:
+                    return self._block_close('\n'.join(result.get('reasons') or
+                        ['서버가 작업 중이라고 응답했지만 세부 이유를 제공하지 않았습니다.']))
+            except Exception as exc:
                 # Allow a dead server or the initial splash to close, but never
                 # apply an update when a live server cannot confirm it is idle.
                 if self._url and self._process is not None and self._process.poll() is None:
-                    return False
+                    return self._block_close(f'서버 응답 확인 실패 ({type(exc).__name__}: {exc})\n'
+                        '작업 진행 여부는 확인되지 않았습니다.')
             self._closing = True
             return True
         finally:
             self._lock.release()
 
+    def _block_close(self, reason):
+        self._close_reason = reason
+        logging.getLogger(__name__).warning('Desktop close blocked: %s', reason)
+        return False
+
     def restart_app(self):
         if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
         if not read_state(self._root).get('pending'): return {'error':'준비된 업데이트가 없습니다.'}
-        if not self._can_close(): return {'error':'진행 중인 업로드·분석·다운로드가 끝난 뒤 재시작해 주세요.'}
+        if not self._can_close(): return {'error':'재시작할 수 없습니다.\n' + self._close_reason}
         self._restart = True
         threading.Timer(.2, self._window.destroy).start()
         return {'ok':True}
@@ -216,7 +231,7 @@ def main():
             # the user. This is exit only; restart/update activation still
             # requires the strict idle gate in restart_app().
             if window.create_confirmation_dialog('Source Extractor 종료',
-                    '진행 중인 작업이 있거나 서버의 종료 상태를 확인하지 못했습니다.\n'
+                    '종료가 차단된 이유:\n' + api._close_reason + '\n\n' +
                     '지금 종료하면 진행 중인 분석·파일 저장·업데이트 설치가 중단될 수 있습니다.\n'
                     '그래도 종료하시겠습니까?'):
                 api._restart = False
