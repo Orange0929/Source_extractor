@@ -1372,7 +1372,13 @@ def api_export_profile(profile_id: str):
 
     clips = [c for c in data["clips"] if c.get("profile_id") == profile_id]
     audio_ids = set(c.get("audio_id") for c in clips)
-    audios = [a for a in data["audios"] if a.get("id") in audio_ids]
+    audios = [a for a in data["audios"] if a.get("profile_id") == profile_id or a.get("id") in audio_ids]
+    if audio_ids - {a.get("id") for a in audios}:
+        return JSONResponse({"error": "일부 대사의 원본 정보가 없어 내보낼 수 없어요."}, status_code=400)
+    missing = [a.get("name") or a.get("path") or a.get("id") for a in audios
+               if not a.get("path") or not (UPLOAD_DIR / a["path"]).is_file()]
+    if missing:
+        return JSONResponse({"error": f"원본 파일이 없어 내보낼 수 없어요: {missing}"}, status_code=400)
 
     export_data = {
         "profiles": [prof],
@@ -1468,6 +1474,10 @@ async def api_import(file: UploadFile = File(...)):
         na["path"] = f"{new_aid}{ext}"
         new_audios.append(na)
 
+    if any(c.get("audio_id") not in audio_id_map for c in imported_clips):
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return JSONResponse({"error": "일부 대사의 원본 정보가 ZIP에 없어요."}, status_code=400)
+
     new_clips = []
     for c in imported_clips:
         old_aid = c.get("audio_id")
@@ -1489,25 +1499,29 @@ async def api_import(file: UploadFile = File(...)):
         if alt.exists():
             uploads_in_zip = alt
 
-    if uploads_in_zip.exists():
-        for a in imported_audios:
-            old_aid = a.get("id")
-            if old_aid not in audio_id_map:
-                continue
-            src_rel = a.get("path")
-            if not src_rel:
-                continue
-            src = uploads_in_zip / src_rel
-            if not src.exists():
-                continue
-
-            new_aid = audio_id_map[old_aid]
-            ext = Path(src_rel).suffix
-            dst = UPLOAD_DIR / f"{new_aid}{ext}"
-            try:
-                shutil.copy2(src, dst)
-            except Exception:
-                pass
+    # Validate all source files before publishing any imported profile.
+    destinations = {a["id"]: a["path"] for a in new_audios}
+    copy_plan = []
+    for a in imported_audios:
+        old_aid = a.get("id")
+        if old_aid not in audio_id_map:
+            continue
+        rel = a.get("path") or ""
+        src = (uploads_in_zip / rel).resolve()
+        if not rel or not src.is_relative_to(uploads_in_zip.resolve()) or not src.is_file():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return JSONResponse({"error": "ZIP에 원본 오디오가 없거나 경로가 잘못됐어요. 원본을 포함해 다시 내보내 주세요."}, status_code=400)
+        copy_plan.append((src, UPLOAD_DIR / destinations[audio_id_map[old_aid]]))
+    copied = []
+    try:
+        for src, dst in copy_plan:
+            copied.append(dst)
+            shutil.copy2(src, dst)
+    except OSError:
+        for dst in copied:
+            dst.unlink(missing_ok=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return JSONResponse({"error": "원본 파일 복사에 실패했어요. 저장 공간과 폴더 권한을 확인해 주세요."}, status_code=500)
 
     data = load_data()
     data["profiles"].append(new_profile)
