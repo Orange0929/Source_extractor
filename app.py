@@ -31,13 +31,15 @@ from faster_whisper import WhisperModel
 # Paths / App
 # =========================
 BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = BASE_DIR / "data.json"
-UPLOAD_DIR = BASE_DIR / "uploads"
-CACHE_DIR = BASE_DIR / "clips_cache"
+DATA_DIR = Path(os.environ.get("SOURCE_EXTRACTOR_DATA_DIR", BASE_DIR)).resolve()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DATA_PATH = DATA_DIR / "data.json"
+UPLOAD_DIR = DATA_DIR / "uploads"
+CACHE_DIR = DATA_DIR / "clips_cache"
 
-EXPORT_DIR = BASE_DIR / "exports"
-IMPORT_DIR = BASE_DIR / "imports_tmp"
-WAVEFORM_DIR = BASE_DIR / "waveform_cache"
+EXPORT_DIR = DATA_DIR / "exports"
+IMPORT_DIR = DATA_DIR / "imports_tmp"
+WAVEFORM_DIR = DATA_DIR / "waveform_cache"
 
 UPLOAD_DIR.mkdir(exist_ok=True)
 CACHE_DIR.mkdir(exist_ok=True)
@@ -604,7 +606,7 @@ def score_contains(needle: str, hay: str) -> int:
 # =========================
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    static_files = tuple(BASE_DIR / "static" / name for name in ("style.css", "app.js", "audio_plot.js", "editor_transport.js"))
+    static_files = tuple(BASE_DIR / "static" / name for name in ("style.css", "app.js", "audio_plot.js", "editor_transport.js", "desktop_ui.js"))
     asset_version = max((path.stat().st_mtime_ns for path in static_files), default=0)
     response = templates.TemplateResponse(
         request=request,

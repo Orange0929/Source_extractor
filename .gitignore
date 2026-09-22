@@ -7,3 +7,9 @@ timeline_cache/
 waveform_cache/
 exports/
 imports_tmp/
+
+.desktop/
+.venv/
+install_log.txt
+data.json
+data.broken.*.json

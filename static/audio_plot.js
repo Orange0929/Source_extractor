@@ -76,17 +76,39 @@ class AudioPlot {
       this.notePixels = this.plotHeight()/((b-a)*128);
       this.draw();
     });
-    this.viewport.addEventListener('wheel', ev => {
-      ev.preventDefault();
-      if (ev.shiftKey || Math.abs(ev.deltaX) > Math.abs(ev.deltaY)) {
-        this.hBar.move((ev.deltaX || ev.deltaY) / Math.max(1,this.surface.clientWidth), 'pan');
-      } else {
-        this.centered = true;
-        this.centerNote -= ev.deltaY / this.notePixels;
-        this.draw();
-      }
-    }, {passive:false});
+    this.viewport.addEventListener('wheel', ev => this.onWheel(ev), {passive:false, capture:true});
     this.draw();
+  }
+  onWheel(ev) {
+    // This non-passive handler must cancel Chromium's page zoom for Ctrl+wheel.
+    ev.preventDefault(); ev.stopPropagation();
+    const rect = this.viewport.getBoundingClientRect();
+    const units = ev.deltaMode === 1 ? 16 : ev.deltaMode === 2 ? this.viewport.clientHeight : 1;
+    const dy = (ev.deltaY || ev.deltaX) * units;
+    const factor = Math.exp(Math.max(-1, Math.min(1, dy * .002)));
+    if (ev.ctrlKey) {
+      const anchor = Math.max(0, Math.min(1, (ev.clientX-rect.left)/Math.max(1,this.viewport.clientWidth)));
+      const span = this.hEnd-this.hStart;
+      const next = Math.max(1/40, Math.min(1, span*factor));
+      const start = Math.max(0, Math.min(1-next, this.hStart+anchor*(span-next)));
+      this.horizontal(start, start+next);
+    } else if (ev.altKey) {
+      this.centered = true;
+      const height = this.plotHeight();
+      const relative = Math.max(-.5, Math.min(.5, (ev.clientY-rect.top-22)/height-.5));
+      const span = height/this.notePixels;
+      const note = this.centerNote-relative*span;
+      const next = Math.max(4, Math.min(128, span*factor));
+      this.notePixels = height/next;
+      this.centerNote = note+relative*next;
+      this.draw();
+    } else if (ev.shiftKey) {
+      this.hBar.move((ev.deltaX || ev.deltaY)*units/Math.max(1,this.surface.clientWidth), 'pan');
+    } else {
+      this.centered = true;
+      this.centerNote -= dy/this.notePixels;
+      this.draw();
+    }
   }
   plotHeight() { return Math.max(48, this.viewport.clientHeight - 44); }
   syncHorizontal() {

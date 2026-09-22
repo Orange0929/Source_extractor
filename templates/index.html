@@ -13,6 +13,15 @@
       <h1 class="notranslate">Voice Search (Local)</h1>
       <p class="sub notranslate">멀티 업로드 + 일괄 WAV 추출 + 파형 구간 편집 + 병렬 STT</p>
     </div>
+    <div id="desktopUpdates" class="desktop-updates" hidden>
+      <span id="desktopVersion" class="hint"></span>
+      <div class="row">
+        <button id="btnCheckUpdate" type="button" class="ghost">업데이트 확인</button>
+        <button id="btnInstallUpdate" type="button" hidden>다운로드 및 준비</button>
+        <button id="btnRestartUpdate" type="button" hidden>재시작하여 적용</button>
+      </div>
+      <div id="desktopUpdateStatus" class="hint" role="status" aria-live="polite"></div>
+    </div>
   </header>
 
   <main class="wrap grid" translate="no">
@@ -165,7 +174,7 @@
           <div id="pitchScroll" class="viewport-bar vertical" aria-label="음높이 스크롤" title="가운데: 위아래 이동 · 양 끝: 세로 확대/축소"></div>
           <div id="timeScroll" class="viewport-bar horizontal" aria-label="시간 스크롤" title="가운데: 좌우 이동 · 양 끝: 가로 확대/축소"></div>
         </div>
-        <p class="hint plot-help">상단 클릭: 재생 커서 · Space: 커서부터 재생/정지 · 아래 드래그: 구간 선택<br />스크롤바 가운데를 잡아 이동 · 양 끝을 잡아 확대/축소 · 휠: 음높이 이동 · Shift+휠: 시간 이동</p>
+        <p class="hint plot-help">상단 클릭: 재생 커서 · Space: 커서부터 재생/정지 · 아래 드래그: 구간 선택<br />스크롤바 가운데를 잡아 이동 · 양 끝을 잡아 확대/축소 · Ctrl+휠: 가로 확대 · Alt+휠: 세로 확대 · Shift+휠: 가로 이동 · 휠: 세로 이동</p>
         <audio id="sourceAudioPlayer" controls preload="metadata"></audio>
 
         <div class="time-grid">
@@ -195,5 +204,6 @@
   <script src="/static/audio_plot.js?v={{ asset_version }}"></script>
   <script src="/static/editor_transport.js?v={{ asset_version }}"></script>
   <script src="/static/app.js?v={{ asset_version }}"></script>
+  <script src="/static/desktop_ui.js?v={{ asset_version }}"></script>
 </body>
 </html>

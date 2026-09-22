@@ -389,3 +389,9 @@ button.danger:hover { filter: brightness(1.15); }
 .wave-playhead { z-index: 4; width: 2px; background: #ffdf71; }
 .wave-playhead::before { content: ""; position: absolute; top: 0; left: -5px; width: 0; height: 0; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 9px solid #ffdf71; }
 .wave-selection { top: 22px; }
+
+[hidden] { display: none !important; }
+.header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.desktop-updates { max-width: 440px; }
+.desktop-updates .row { margin: 6px 0; }
+#desktopUpdateStatus { overflow-wrap: anywhere; }

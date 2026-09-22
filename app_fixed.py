@@ -16,7 +16,7 @@ import app as core
 # cutter sought on the original container timestamps. Long/edited MP3/AAC/video
 # sources can therefore drift. Build one canonical, sample-timed lossless audio
 # file and use that exact timeline for BOTH STT and clip extraction.
-TIMELINE_DIR = core.BASE_DIR / "timeline_cache"
+TIMELINE_DIR = core.DATA_DIR / "timeline_cache"
 TIMELINE_DIR.mkdir(exist_ok=True)
 TIMELINE_LOCK = threading.Lock()
 
