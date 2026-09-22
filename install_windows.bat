@@ -1,5 +1,6 @@
 @echo off
 setlocal EnableExtensions
+cd /d "%~dp0"
 
 set LOG=install_log.txt
 echo ===== install_windows.bat started at %date% %time% ===== > "%LOG%"
@@ -17,6 +18,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo [1/4] Preparing Python environment...
 echo [INFO] Creating venv... >> "%LOG%"
 if not exist .venv (
   python -m venv .venv 1>>"%LOG%" 2>>&1
@@ -37,6 +39,8 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo [2/4] Checking/installing pitch runtime. First install may take several minutes.
+echo Progress log: %cd%\install_log.txt
 echo [INFO] Installing CPU pitch runtime... >> "%LOG%"
 call .venv\Scripts\python.exe -m pip install torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu 1>>"%LOG%" 2>>&1
 if errorlevel 1 (
@@ -45,8 +49,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo [3/4] Installing app components...
 echo [INFO] Installing requirements... >> "%LOG%"
-call .venv\Scripts\pip.exe install -r requirements.txt 1>>"%LOG%" 2>>&1
+call .venv\Scripts\python.exe -m pip install -r requirements-desktop.txt 1>>"%LOG%" 2>>&1
 set RC=%errorlevel%
 
 echo [INFO] pip install exit code: %RC% >> "%LOG%"
@@ -66,9 +71,12 @@ if errorlevel 1 (
   echo [WARN] ffmpeg not found in PATH. >> "%LOG%"
 )
 
+echo [4/4] Creating desktop shortcut...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0create_shortcut.ps1" -InstallRoot "%cd%" 1>>"%LOG%" 2>>&1
+if errorlevel 1 echo [WARN] Shortcut creation failed. Use run_windows.bat instead.
 echo [OK] Install complete. >> "%LOG%"
 echo.
-echo [OK] Install complete.
+echo [OK] Install complete. Open Source Extractor on your desktop or run_windows.bat.
 echo Log saved to: %LOG%
 echo.
 type "%LOG%"
