@@ -1481,7 +1481,8 @@ async def api_upload(
 
     # job 생성/실행은 그대로
     job_id = str(uuid.uuid4())
-    set_job(job_id, status="queued", progress=0, message="대기중...", clips_created=0)
+    set_job(job_id, status="queued", progress=0, message="대기중...", clips_created=0,
+            filename=audio.filename or saved_path.name)
 
     fut = EXECUTOR.submit(run_stt_job, job_id, profile_id, audio_id, saved_path)
     _set_future(job_id, fut)

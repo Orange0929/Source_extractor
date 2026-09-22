@@ -12,10 +12,44 @@ import urllib.request
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from desktop_server import blocks_close
+from desktop_server import blocks_close, job_reason, operation_label
+from concurrent.futures import Future
+from unittest.mock import Mock, patch
+from desktop_app import DesktopApi
 
 
 class CloseTrackingTest(unittest.TestCase):
+    def test_reason_labels_and_finishing_jobs(self):
+        self.assertEqual(operation_label({'path':'/api/import'}), '프로필 가져오기')
+        self.assertEqual(operation_label({'path':'/api/audio_analysis/a'}), '피치 분석')
+        future = Future()
+        job = {'filename':'대사.wav', 'status':'done', 'progress':100, '_future':future}
+        self.assertIn('분석 종료 처리 중: 대사.wav', job_reason(job))
+        future.set_result(None)
+        self.assertIsNone(job_reason(job))
+
+    def test_close_reason_distinguishes_server_update_and_failure(self):
+        with tempfile.TemporaryDirectory() as temp:
+            api = DesktopApi(Path(temp), 'http://127.0.0.1:1', 'test')
+            api._process = Mock()
+            api._process.poll.return_value = None
+            with patch.object(api, '_server', return_value={'ok':False,'reasons':['피치 분석: 1건']}):
+                self.assertFalse(api._can_close())
+                self.assertEqual(api._close_reason, '피치 분석: 1건')
+            with patch.object(api, '_server', side_effect=TimeoutError('timed out')):
+                self.assertFalse(api._can_close())
+                self.assertIn('서버 응답 확인 실패', api._close_reason)
+            api._set('downloading', '실행 구성 요소 설치 중')
+            api._lock.acquire()
+            try:
+                self.assertFalse(api._can_close())
+                self.assertIn('실행 구성 요소 설치 중', api._close_reason)
+            finally:
+                api._lock.release()
+            with patch.object(api, '_server', return_value={'ok':True}):
+                self.assertTrue(api._can_close())
+                self.assertEqual(api._close_reason, '')
+
     def test_playback_search_and_polling_do_not_block_exit(self):
         for path in ('/api/audio_source/a', '/api/clip_audio/c', '/api/audio_range/a',
                      '/api/search', '/api/search/ids', '/api/jobs/j', '/api/profiles',
