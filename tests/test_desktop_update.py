@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -103,5 +104,22 @@ class UpdateTests(unittest.TestCase):
             self.assertFalse(api._closing)
         with patch.object(api,'_server',return_value={'ok':True,'busy':False}):
             self.assertTrue(api._can_close())
+
+    def test_diagnostic_log_is_saved_with_bounded_log_tail(self):
+        target=self.root/'diagnostic.txt'
+        logs=self.root/'.desktop';logs.mkdir()
+        (logs/'server.log').write_text('old\n'+'useful failure\n')
+        api=DesktopApi(self.root,'http://127.0.0.1:8000','secret')
+        api._window=type('Window',(),{
+            'get_current_url':lambda _: 'http://127.0.0.1:8000/',
+            'create_file_dialog':lambda *args,**kwargs: str(target),
+        })()
+        fake=types.SimpleNamespace(SAVE_DIALOG=1)
+        with patch.dict(sys.modules,{'webview':fake}): result=api.save_diagnostic_log()
+        self.assertIn('완료',result['message'])
+        report=target.read_text()
+        self.assertIn('Source Extractor diagnostic log',report)
+        self.assertIn('useful failure',report)
+        self.assertIn('[state]',report)
 
 if __name__=='__main__':unittest.main()

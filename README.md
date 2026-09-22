@@ -49,6 +49,8 @@ Python **3.12.10 (64비트, 설치 시 Add Python to PATH)**와 FFmpeg/ffprobe�
 
 - 앱 시작/실행 기록: `.desktop/app.log`, 로컬 서버 기록: `.desktop/server.log`
 - 업데이트 패키지 설치 기록: `.desktop/update.log`
+- 앱 상단 **진단 로그 저장**으로 위 로그와 버전 정보를 TXT 하나로 저장할 수 있습니다.
+- **서버 CMD 열기**는 현재 로컬 서버 주소와 `server.log`의 실시간 출력을 보여주는 디버그 창입니다. CMD를 닫아도 앱은 종료되지 않습니다.
 - 앱이 열리지 않으면 WebView2 Runtime 설치 여부를 확인하세요.
 - 브라우저 방식이 필요하면 앱을 닫고 `run_browser_windows.bat` 실행 후 `http://127.0.0.1:8000`에 접속하세요. 이 방식은 마지막 정상 적용 버전으로 실행하며, 앱 내 업데이트 버튼은 표시하지 않습니다. 앱과 브라우저 서버를 동시에 실행하지 마세요.
 

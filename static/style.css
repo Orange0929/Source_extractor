@@ -395,3 +395,5 @@ button.danger:hover { filter: brightness(1.15); }
 .desktop-updates { max-width: 440px; }
 .desktop-updates .row { margin: 6px 0; }
 #desktopUpdateStatus { overflow-wrap: anywhere; }
+.profile-loading { display: grid; gap: 7px; margin: 10px 0; color: var(--muted); font-size: 13px; }
+.profile-loading progress { width: 100%; height: 9px; }

@@ -19,6 +19,8 @@
         <button id="btnCheckUpdate" type="button" class="ghost">업데이트 확인</button>
         <button id="btnInstallUpdate" type="button" hidden>다운로드 및 준비</button>
         <button id="btnRestartUpdate" type="button" hidden>재시작하여 적용</button>
+        <button id="btnSaveLogs" type="button" class="ghost">진단 로그 저장</button>
+        <button id="btnOpenDebugCmd" type="button" class="ghost">서버 CMD 열기</button>
       </div>
       <div id="desktopUpdateStatus" class="hint" role="status" aria-live="polite"></div>
     </div>
@@ -109,6 +111,10 @@
       </div>
 
       <div id="resultSummary" class="result-summary notranslate">0개</div>
+      <div id="profileLoading" class="profile-loading" hidden aria-live="polite">
+        <progress aria-label="프로필 불러오는 중"></progress>
+        <span>프로필의 오디오와 대사를 불러오는 중…</span>
+      </div>
       <div id="results" class="results"></div>
       <button id="btnLoadMore" class="load-more ghost notranslate" type="button" style="display:none;">더 보기</button>
 

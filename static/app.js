@@ -22,6 +22,7 @@ const btnDownloadSelected = document.getElementById("btnDownloadSelected");
 const btnDeleteSelected = document.getElementById("btnDeleteSelected");
 const btnLoadMore = document.getElementById("btnLoadMore");
 const resultSummary = document.getElementById("resultSummary");
+const profileLoading = document.getElementById("profileLoading");
 
 const audioPlayer = document.getElementById("audioPlayer");
 const playerTitle = document.getElementById("playerTitle");
@@ -695,6 +696,9 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
 
   if (token !== editorLoadToken) return;
   waveformViewport.style.display = "block";
+  // Wait for display:block to have a real width before the first wheel gesture.
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  audioPlot.activate();
   const selectedLength = Math.max(0, Number(preferredEnd) - Number(preferredStart));
   const visibleLength = editorViewEnd - editorViewStart;
   waveformStatus.textContent = preferredStart == null
@@ -1279,6 +1283,12 @@ elSearchMode.addEventListener("change", async () => {
 });
 
 elProfileSelect.addEventListener("change", async () => {
+  profileLoading.hidden = false;
+  elProfileSelect.disabled = true;
+  elResults.setAttribute("aria-busy", "true");
+  resultSummary.textContent = "프로필 불러오는 중…";
+  // Let the progress bar paint before the first network/disk request starts.
+  await new Promise(resolve => requestAnimationFrame(resolve));
   selectedClipIds.clear();
   updateBulkDeleteButton();
   resetPlayer();
@@ -1293,6 +1303,10 @@ elProfileSelect.addEventListener("change", async () => {
     await doSearch(false);
   } catch (e) {
     alert(e.message);
+  } finally {
+    profileLoading.hidden = true;
+    elProfileSelect.disabled = false;
+    elResults.removeAttribute("aria-busy");
   }
 });
 

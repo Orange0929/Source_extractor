@@ -5,6 +5,8 @@
   const install = document.getElementById('btnInstallUpdate');
   const restart = document.getElementById('btnRestartUpdate');
   const status = document.getElementById('desktopUpdateStatus');
+  const saveLogs = document.getElementById('btnSaveLogs');
+  const openCmd = document.getElementById('btnOpenDebugCmd');
   let api = null, timer = null, ready = false;
   function render(state) {
     status.textContent = state.error || state.message || '';
@@ -43,6 +45,22 @@
       if (result.error) status.textContent = result.error;
     } catch (e) { status.textContent = String(e); }
     finally { restart.disabled = false; }
+  });
+  saveLogs.addEventListener('click', async () => {
+    saveLogs.disabled = true;
+    try {
+      const result = await api.save_diagnostic_log();
+      status.textContent = result.message || result.error || '';
+    } catch (e) { status.textContent = String(e); }
+    finally { saveLogs.disabled = false; }
+  });
+  openCmd.addEventListener('click', async () => {
+    openCmd.disabled = true;
+    try {
+      const result = await api.open_debug_cmd();
+      status.textContent = result.message || result.error || '';
+    } catch (e) { status.textContent = String(e); }
+    finally { openCmd.disabled = false; }
   });
   window.addEventListener('pywebviewready', connect);
   connect();
