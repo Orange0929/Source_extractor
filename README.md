@@ -56,12 +56,23 @@ Python **3.12.10 (64비트, 설치 시 Add Python to PATH)**와 FFmpeg/ffprobe�
 
 ## 개발 검증
 
+한국어 발음 검색과 연속음 검색은 g2pk2 및 MeCab 형태소 분석을 사용합니다.
+된소리되기, 구개음화, ㅎ 변화, ㄴ 첨가, 겹받침, 7종성 중화와 문맥에 따른
+일부 발음 변화를 처리합니다. 사투리·고유명사·실제 화자의 발음까지 보장하지는 않습니다.
+기존/가져온 프로필은 원래 대사에서 새 검색 키를 계산하므로 재추출할 필요가 없습니다.
+변환 결과는 실행 중 캐시하며, 재시작 후 첫 발음 검색은 다시 계산합니다.
+이번 의존성 변경 업데이트는 별도 실행 환경을 설치하므로 코드만 바뀐 업데이트보다 오래 걸릴 수 있습니다.
+검색 중 추가 다운로드나 pip 설치는 하지 않습니다. ZIP 덮어쓰기 사용자는
+`install_windows.bat`를 다시 실행해 의존성을 설치하세요.
+
 Python API 테스트에는 FastAPI/NumPy/ffmpeg 외에 `httpx`가 필요합니다. 데스크톱 업데이트 테스트는 GUI·네트워크·AI 모델 없이 수행할 수 있습니다.
 
 ```text
 python -m unittest discover -s tests -p test_desktop_update.py -v
 python -m unittest discover -s tests -p test_desktop_server.py -v
 python -m unittest discover -s tests -p test_profile_roundtrip.py -v
+python -m unittest discover -s tests -p test_search_modes.py -v
+python -m unittest discover -s tests -p test_korean_offline.py -v
 node tests/test_plot_wheel.cjs
 node tests/test_editor_transport.cjs
 ```

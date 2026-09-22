@@ -163,6 +163,10 @@ def prepare_runtime(root, code, current, progress):
                          '--index-url', 'https://download.pytorch.org/whl/cpu'], log)
         run_install([python, '-m', 'pip', 'install', '-r', code/'requirements-desktop.txt'], log)
         run_install([python, '-c', 'import webview, uvicorn, faster_whisper, torchfcpe'], log)
+        run_install([python, '-c',
+                     'import sys; sys.path.insert(0, sys.argv[1]); '
+                     'from korean_pronunciation import pronounce; '
+                     'assert pronounce("학교") == "학꾜"', str(code)], log)
         atomic_json(marker, {'complete': True})
     except Exception:
         shutil.rmtree(runtime, ignore_errors=True)

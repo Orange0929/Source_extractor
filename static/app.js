@@ -164,7 +164,7 @@ let activeClipBounds = null;
 const WAVE_CONTEXT_STORAGE_KEY = "sourceExtractor.waveContextSeconds";
 const SEARCH_MODE_HELP = {
   basic: "표기 그대로 검색 · 띄어쓰기/기호는 무시하지만 발음 변화나 다른 문자 표기는 변환하지 않습니다.",
-  ko_sound: "한국어의 제한적인 연음·비음화·유음화와 받침 대표음을 적용해 실제 발음에 가깝게 검색합니다.",
+  ko_sound: "형태소 분석 기반 발음 검색 · 연음·동화·된소리·구개음화·ㅎ 변화·ㄴ 첨가·겹받침·7종성을 적용합니다. 사투리와 실제 발음 변형은 다를 수 있습니다.",
   jp_sound: "가나를 기준으로 검색 · 로마자나 한글 입력은 일본어 가나로 추정 변환합니다.",
   continuous: "음소열 검색 · u do, 우도, ㅜ도, ㅜㄷㅗ를 같은 연속음으로 취급합니다.",
 };

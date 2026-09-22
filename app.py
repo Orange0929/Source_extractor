@@ -13,6 +13,7 @@ import mimetypes
 import math
 import hashlib
 import unicodedata
+from korean_pronunciation import pronounce
 from audio_analysis import read_audio, envelope, pitch
 from datetime import datetime
 from pathlib import Path
@@ -435,20 +436,7 @@ def syllables_to_jamo(items: List[Dict[str, str]]) -> str:
 
 
 def norm_ko_sound(s: str) -> str:
-    items = decompose_syllables_ko(s)
-    apply_liaison(items)
-    apply_assimilation(items)
-
-    out_items: List[Dict[str, str]] = []
-    for it in items:
-        if it["type"] == "other":
-            out_items.append(it)
-        else:
-            it2 = dict(it)
-            it2["jong"] = simplify_final_for_pron(it.get("jong") or "")
-            out_items.append(it2)
-
-    return syllables_to_jamo(out_items)
+    return norm_basic(pronounce(s))
 
 
 # =========================
@@ -504,10 +492,8 @@ def norm_continuous_phones(text: str, loose: bool = False) -> str:
     Silent onset ㅇ is omitted, so `u do`, `우도`, and `ㅜ도` share exactly
     the same key. Final ㅇ remains an audible /ng/ phone.
     """
-    text = unicodedata.normalize("NFC", text or "")
+    text = pronounce(unicodedata.normalize("NFC", text or ""))
     items = decompose_syllables_ko(text)
-    apply_liaison(items)
-    apply_assimilation(items)
     phones: List[str] = []
     for item in items:
         if item["type"] == "hangul":
@@ -536,7 +522,6 @@ def norm_continuous_phones(text: str, loose: bool = False) -> str:
                 phones.extend(roman_to_ko_phones(part))
             else:
                 subitems = decompose_syllables_ko(part)
-                apply_liaison(subitems); apply_assimilation(subitems)
                 for item in subitems:
                     if item["type"] == "hangul":
                         onset = item.get("cho") or ""
@@ -1038,9 +1023,11 @@ def search_clips(q: str, profile_id: Optional[str], mode: str) -> List[Dict[str,
         elif mode == "ko_sound":
             if not any(is_hangul_syllable(ch) for ch in txt):
                 continue
-            hay = c.get("ko_pron_norm") or norm_ko_sound(txt)
+            # Stored keys may come from older versions or imported profiles.
+            # The bounded pronunciation cache is keyed by transcript instead.
+            hay = norm_ko_sound(txt)
         elif mode == "continuous":
-            hay = c.get("continuous_norm") or norm_continuous_phones(txt)
+            hay = norm_continuous_phones(txt)
             strict_score = score_contains(needle, hay)
             loose_hay = norm_continuous_phones(txt, loose=True)
             loose_score = score_contains(loose_needle, loose_hay)
@@ -1054,6 +1041,11 @@ def search_clips(q: str, profile_id: Optional[str], mode: str) -> List[Dict[str,
                 continue
 
         s = score_contains(needle, hay)
+        if mode == "ko_sound":
+            # A short query lacks the sentence's morphological context.
+            # Keep literal spelling searchable even if its inferred reading
+            # differs from the reading inside the full transcript.
+            s = max(s, score_contains(norm_basic(q), norm_basic(txt)))
         if s > 0:
             scored.append((s, c))
 
