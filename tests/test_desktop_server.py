@@ -11,6 +11,26 @@ import urllib.error
 import urllib.request
 
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+from desktop_server import blocks_close
+
+
+class CloseTrackingTest(unittest.TestCase):
+    def test_playback_search_and_polling_do_not_block_exit(self):
+        for path in ('/api/audio_source/a', '/api/clip_audio/c', '/api/audio_range/a',
+                     '/api/search', '/api/search/ids', '/api/jobs/j', '/api/profiles',
+                     '/api/audios', '/api/desktop/health'):
+            with self.subTest(path=path):
+                self.assertFalse(blocks_close({'type':'http', 'method':'GET', 'path':path}))
+
+    def test_mutations_exports_and_analysis_remain_protected(self):
+        for method, path in (('POST','/api/import'), ('POST','/api/upload'),
+                             ('DELETE','/api/clips/c'), ('GET','/api/export/profile/p'),
+                             ('GET','/api/clips/bulk_download/d'),
+                             ('GET','/api/audio_analysis/a'), ('GET','/api/audio_waveform/a')):
+            with self.subTest(path=path):
+                self.assertTrue(blocks_close({'type':'http','method':method,'path':path}))
+        self.assertFalse(blocks_close({'type':'http','method':'POST','path':'/api/desktop/prepare-close'}))
 
 
 class DesktopServerTest(unittest.TestCase):
