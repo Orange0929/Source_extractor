@@ -28,6 +28,19 @@ class AudioPlot {
     const target = span / 6;
     const power = 10 ** Math.floor(Math.log10(Math.max(target, .001)));
     const step = [1,2,5,10].map(v => v * power).find(v => v >= target);
+    const notes = this.points.filter(p => p[1] != null).map(p => 69 + 12 * Math.log2(p[1] / 440));
+    let low = notes.length ? Math.floor(Math.min(...notes)) - 2 : 48;
+    let high = notes.length ? Math.ceil(Math.max(...notes)) + 2 : 72;
+    if (high-low < 12) { const mid=(low+high)/2; low=mid-6; high=mid+6; }
+    const y = n => 183 - (n-low)/(high-low)*154;
+    // Each horizontal band is one semitone, centered on the pitch line.
+    c.save(); c.beginPath(); c.rect(0, 22, w, 168); c.clip();
+    for (let n = Math.floor(low)-1; n <= Math.ceil(high)+1; n++) {
+      const black = [1,3,6,8,10].includes(((n % 12)+12)%12);
+      c.fillStyle = black ? '#101722' : '#222e40';
+      c.fillRect(0, y(n+.5), w, y(n-.5)-y(n+.5));
+    }
+    c.restore();
     c.font = '11px system-ui';
     for (let t = Math.ceil(a / step) * step; t <= Math.min(end, a + span); t += step) {
       const px = x(t);
@@ -50,11 +63,6 @@ class AudioPlot {
     };
     band(peaks, '#63bddb'); band(rms, '#c3f3ff');
     c.fillStyle = '#c3d3e6'; c.fillText('음량 파형 + 피치', 8, 17);
-    const notes = this.points.filter(p => p[1] != null).map(p => 69 + 12 * Math.log2(p[1] / 440));
-    let low = notes.length ? Math.floor(Math.min(...notes)) - 2 : 48;
-    let high = notes.length ? Math.ceil(Math.max(...notes)) + 2 : 72;
-    if (high-low < 12) { const mid=(low+high)/2; low=mid-6; high=mid+6; }
-    const y = n => 183 - (n-low)/(high-low)*154;
     const stride = Math.max(1, Math.ceil((high-low)/8));
     for (let n = Math.ceil(low); n <= high; n += stride) {
       c.strokeStyle='rgba(112,135,165,.24)'; c.beginPath(); c.moveTo(0,y(n)); c.lineTo(w,y(n)); c.stroke();
