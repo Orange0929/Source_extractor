@@ -49,7 +49,40 @@ class SearchModesTest(unittest.TestCase):
 
     def test_korean_sound_mode_does_not_change_meaning(self):
         self.assertEqual(app.search_clips('u do', 'p', 'ko_sound'), [])
-        self.assertEqual(app.norm_continuous_phones('옷 안'), app.norm_continuous_phones('오산'))
+        self.assertEqual(app.norm_continuous_phones('옷이'), app.norm_continuous_phones('오시'))
+
+    def test_pronunciation_rules_in_both_modes(self):
+        pairs = [('학교', '학꾜'), ('같이', '가치'), ('굳이', '구지'),
+                 ('좋다', '조타'), ('놓아', '노아'), ('많다', '만타'),
+                 ('국화', '구콰'), ('닫히다', '다치다'), ('솜이불', '솜니불'),
+                 ('읽고', '일꼬'), ('읽어', '일거'), ('밟다', '밥따'),
+                 ('값이', '갑씨'), ('꽃', '꼳'), ('국물', '궁물'), ('신라', '실라')]
+        for spelling, sound in pairs:
+            for normalize in (app.norm_ko_sound, app.norm_continuous_phones):
+                with self.subTest(spelling=spelling, mode=normalize.__name__):
+                    self.assertEqual(normalize(spelling), normalize(sound))
+
+    def test_all_final_consonant_classes(self):
+        for spellings in ('각갂갘', '간', '갇갓갔갖갗같갛', '갈', '감', '갑갚', '강'):
+            self.assertEqual(len({app.norm_ko_sound(s) for s in spellings}), 1)
+
+    def test_context_and_stale_imported_keys(self):
+        from korean_pronunciation import pronounce
+        sentence = '신을 신고 얼른 동사무소에 가서 혼인 신고 해라'
+        self.assertIn('신꼬', pronounce(sentence))
+        self.assertIn('호닌 신고', pronounce(sentence))
+        data = app.load_data()
+        data['clips'] = [{'id': 'old', 'profile_id': 'p', 'transcript': '학교',
+                          'ko_pron_norm': 'obsolete', 'continuous_norm': 'obsolete'}]
+        app.DATA_PATH.write_text(json.dumps(data), encoding='utf-8')
+        for mode in ('ko_sound', 'continuous'):
+            for query in ('학교', '학꾜'):
+                self.assertEqual(app.search_clips(query, 'p', mode)[0]['id'], 'old')
+
+    def test_romanization_and_final_ng_are_preserved(self):
+        self.assertEqual(app.norm_continuous_phones('ㅜ do'), 'ㅜㄷㅗ')
+        self.assertNotEqual(app.norm_continuous_phones('아'), app.norm_continuous_phones('앙'))
+        self.assertEqual(app.norm_continuous_phones('강아지'), 'ㄱㅏㅇㅏㅈㅣ')
 
     def test_empty_continuous_query_keeps_existing_list_behavior(self):
         self.assertEqual(len(app.search_clips('', 'p', 'continuous')), 4)
