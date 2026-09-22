@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import platform
 import secrets
 import subprocess
 import sys
@@ -10,6 +11,7 @@ import threading
 import time
 import urllib.request
 import uuid
+from datetime import datetime
 
 from desktop_update import (REPOSITORY, atomic_json, latest_revision, read_state,
                             stage_update)
@@ -55,6 +57,63 @@ class DesktopApi:
     def update_status(self):
         if not self._trusted(): return {'phase':'error','message':'앱 화면을 확인하세요.'}
         with self._status_lock: return dict(self._status)
+
+    def save_diagnostic_log(self):
+        if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
+        try:
+            import webview
+            name = 'source_extractor_diagnostic_' + datetime.now().strftime('%Y%m%d_%H%M%S') + '.txt'
+            selected = self._window.create_file_dialog(webview.SAVE_DIALOG,
+                save_filename=name, file_types=('Text files (*.txt)', 'All files (*.*)'))
+            if not selected: return {'message':'로그 저장을 취소했습니다.'}
+            target = Path(selected[0] if isinstance(selected, (tuple, list)) else selected)
+            state = read_state(self._root)
+            sections = [
+                'Source Extractor diagnostic log',
+                f'created: {datetime.now().isoformat(timespec="seconds")}',
+                f'platform: {platform.platform()}',
+                f'python: {sys.version}',
+                f'app revision: {os.environ.get("SOURCE_EXTRACTOR_REVISION", "local")}',
+                f'local server: {self._url}',
+                '\n[state]\n' + json.dumps(state, ensure_ascii=False, indent=2),
+            ]
+            for label, path in (
+                ('app.log', self._root/'.desktop'/'app.log'),
+                ('server.log', self._root/'.desktop'/'server.log'),
+                ('update.log', self._root/'.desktop'/'update.log'),
+                ('install_log.txt', self._root/'install_log.txt'),
+            ):
+                if path.is_file():
+                    # The tail contains the useful failure while preventing an
+                    # old installation log from creating an unbounded report.
+                    raw = path.read_bytes()[-2 * 1024 * 1024:]
+                    sections.append(f'\n[{label}]\n' + raw.decode('utf-8', errors='replace'))
+            target.write_text('\n'.join(sections), encoding='utf-8')
+            return {'message':f'진단 로그 저장 완료: {target}'}
+        except Exception as exc:
+            return {'error':f'로그 저장 실패: {exc}'}
+
+    def open_debug_cmd(self):
+        if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
+        if os.name != 'nt': return {'error':'서버 CMD는 Windows에서만 열 수 있습니다.'}
+        try:
+            script = self._root/'.desktop'/'show-server-log.ps1'
+            script.write_text(
+                "param([string]$LogPath,[string]$ServerUrl)\n"
+                "$Host.UI.RawUI.WindowTitle='Source Extractor - Local Server Log'\n"
+                "Write-Host ('Local server: '+$ServerUrl) -ForegroundColor Cyan\n"
+                "Write-Host ('Live log: '+$LogPath) -ForegroundColor DarkGray\n"
+                "Write-Host 'This is a viewer. Closing it does not stop the app.' -ForegroundColor Yellow\n"
+                "if (!(Test-Path -LiteralPath $LogPath)) { New-Item -ItemType File -Path $LogPath -Force | Out-Null }\n"
+                "Get-Content -LiteralPath $LogPath -Tail 200 -Wait\n",
+                encoding='utf-8')
+            subprocess.Popen(['cmd.exe','/k','powershell.exe','-NoLogo','-NoProfile','-NoExit',
+                '-ExecutionPolicy','Bypass','-File',str(script),'-LogPath',
+                str(self._root/'.desktop'/'server.log'),'-ServerUrl',self._url],
+                cwd=self._root, creationflags=subprocess.CREATE_NEW_CONSOLE)
+            return {'message':'로컬 서버 실시간 로그 CMD를 열었습니다.'}
+        except Exception as exc:
+            return {'error':f'CMD 열기 실패: {exc}'}
 
     def check_update(self):
         if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}

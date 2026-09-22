@@ -65,6 +65,7 @@ class AudioPlot {
     this.data = null; this.points = []; this.gain = 1;
     this.notePixels = 24; this.centerNote = 60; this.centered = false;
     this.hStart = 0; this.hEnd = 1;
+    this.viewportReady = false;
     viewport.addEventListener('scroll', () => { this.syncHorizontal(); this.draw(); });
     new ResizeObserver(() => this.horizontal(this.hStart, this.hEnd)).observe(viewport);
   }
@@ -87,6 +88,11 @@ class AudioPlot {
     const dy = (ev.deltaY || ev.deltaX) * units;
     const factor = Math.exp(Math.max(-1, Math.min(1, dy * .002)));
     if (ev.ctrlKey) {
+      // A newly unhidden viewport can still carry its zero-width setup state.
+      // Read the real layout before the first Ctrl+wheel so no manual scrollbar
+      // adjustment is required to "wake up" horizontal zoom.
+      if (!this.viewportReady) this.activate();
+      this.syncHorizontal();
       const anchor = Math.max(0, Math.min(1, (ev.clientX-rect.left)/Math.max(1,this.viewport.clientWidth)));
       const span = this.hEnd-this.hStart;
       const next = Math.max(1/40, Math.min(1, span*factor));
@@ -109,6 +115,12 @@ class AudioPlot {
       this.centerNote -= dy/this.notePixels;
       this.draw();
     }
+  }
+  activate() {
+    if (!this.viewport.clientWidth) return false;
+    this.viewportReady = true;
+    this.horizontal(this.hStart, this.hEnd);
+    return true;
   }
   plotHeight() { return Math.max(48, this.viewport.clientHeight - 44); }
   syncHorizontal() {
@@ -135,7 +147,7 @@ class AudioPlot {
   }
   clear() {
     this.data = null; this.points = []; this.notePixels = 24;
-    this.centerNote = 60; this.centered = false; this.horizontal(0,1);
+    this.centerNote = 60; this.centered = false; this.viewportReady = false; this.horizontal(0,1);
   }
   note(midi) {
     const n = Math.round(midi);
