@@ -265,6 +265,7 @@ def save_data_fixed(data: Dict[str, Any]):
 # Patch the globals used by the already-registered FastAPI endpoints.
 core.extract_clip = extract_clip_fixed
 core.audio_timeline_source = ensure_timeline_audio
+core.audio_timeline_cached_source = timeline_path_for_source
 core.run_stt_job = run_stt_job_fixed
 core.save_data = save_data_fixed
 

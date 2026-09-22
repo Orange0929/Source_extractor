@@ -359,3 +359,27 @@ button.danger:hover { filter: brightness(1.15); }
 .plot-controls label { display: flex; align-items: center; gap: 8px; font-size: 12px; }
 .plot-controls input[type=range] { width: 100px; padding: 0; }
 #pitchStatus { margin: 5px 0; color: #eed28b; }
+
+/* Zoom and pan share the same resizable viewport thumb on each axis. */
+.plot-shell { display: grid; grid-template-columns: minmax(0, 1fr) 24px; grid-template-rows: minmax(0,1fr) 24px; gap: 6px; height: 330px; margin: 10px 0; }
+.plot-shell .waveform-viewport { grid-column: 1; grid-row: 1; width: 100%; height: 100%; box-sizing: border-box; min-width: 0; margin: 0; scrollbar-width: none; border-radius: 6px; }
+.waveform-viewport::-webkit-scrollbar { display: none; }
+.plot-shell .waveform-surface { height: 100%; }
+.viewport-bar { position: relative; background: #101722; border-radius: 6px; touch-action: none; user-select: none; }
+.viewport-bar.horizontal { grid-column: 1; grid-row: 2; }
+.viewport-bar.vertical { grid-column: 2; grid-row: 1; }
+.viewport-thumb { position: absolute; display: flex; background: #455b76; border: 1px solid #8198b4; border-radius: 5px; box-sizing: border-box; overflow: hidden; }
+.horizontal .viewport-thumb { height: 100%; }
+.vertical .viewport-thumb { width: 100%; flex-direction: column; }
+.viewport-grip { flex: 1; min-width: 0; min-height: 0; cursor: grab; }
+.viewport-grip:active { cursor: grabbing; }
+.viewport-end { flex: 0 1 8px; background: #a9c4df; border: 2px solid #455b76; box-sizing: border-box; }
+.horizontal .viewport-end { cursor: ew-resize; }
+.vertical .viewport-end { cursor: ns-resize; }
+.viewport-thumb :focus-visible { outline: 2px solid #ffdb70; outline-offset: -2px; }
+#btnExpandEditor { margin-left: auto; white-space: nowrap; }
+.clip-editor.is-expanded { position: fixed; inset: 0; z-index: 10000; margin: 0; padding: 12px; border-radius: 0; background: #0d1420; box-sizing: border-box; display: flex !important; flex-direction: column; }
+.clip-editor.is-expanded > :not(.editor-head):not(.plot-shell) { display: none !important; }
+.clip-editor.is-expanded .editor-head { flex-direction: row; flex: 0 0 auto; justify-content: flex-end; }
+.clip-editor.is-expanded .editor-head > div { display: none; }
+.clip-editor.is-expanded .plot-shell { flex: 1; min-height: 0; height: auto; margin-bottom: 0; }

@@ -1,6 +1,7 @@
 """Profile ZIP integration tests, without downloading STT or pitch models."""
 import io
 import json
+import shutil
 from pathlib import Path
 import sys
 import tempfile
@@ -46,12 +47,25 @@ class ProfileRoundtrip(unittest.TestCase):
         self.client=TestClient(core.app)
         self.addCleanup(self.client.close)
 
-    def test_roundtrip_and_reanalysis(self):
+    def test_roundtrip_preserves_pitch_without_model(self):
         before=self.client.get('/api/audio_analysis/a',params={'start_s':.2,'end_s':1.8}).json()
+        params = {'start_s':.2,'end_s':1.8,'kind':'pitch'}
+        with patch.object(core, 'pitch', return_value={'points':[[.2,220.0],[.21,None]],'method':'FCPE'}) as detector:
+            pitch_before = self.client.get('/api/audio_analysis/a', params=params).json()
+            self.assertEqual(detector.call_count, 1)
+        # Restart-equivalent: clear all in-memory content fingerprints.
+        core.pitch_store._digest.cache_clear()
+        with patch.object(core, 'pitch', side_effect=AssertionError('model must not run')):
+            self.assertEqual(self.client.get('/api/audio_analysis/a', params=params).json(), pitch_before)
         exported=self.client.get('/api/export/profile/p')
         self.assertEqual(exported.status_code,200)
         with zipfile.ZipFile(io.BytesIO(exported.content)) as z:
             self.assertIn('uploads/empty.wav',z.namelist())
+            self.assertTrue(any(n.startswith('pitch/') for n in z.namelist()))
+        # A fresh installation has no local cached pitch or canonical timeline.
+        shutil.rmtree(core.WAVEFORM_DIR / 'pitch')
+        shutil.rmtree(app_fixed.TIMELINE_DIR)
+        app_fixed.TIMELINE_DIR.mkdir()
         imported=self.client.post('/api/import',files={'file':('profile.zip',exported.content,'application/zip')})
         self.assertEqual(imported.status_code,200,imported.text)
         pid=imported.json()['imported_profile']['id']
@@ -63,23 +77,61 @@ class ProfileRoundtrip(unittest.TestCase):
         after=self.client.get('/api/audio_analysis/'+aid,params={'start_s':.2,'end_s':1.8})
         self.assertEqual(after.status_code,200,after.text)
         self.assertEqual(before,after.json())
-        # Verify the pitch route receives identical decoded samples and origin;
-        # the neural model itself is covered separately in test_audio_analysis.
-        received=[]
-        def detector(samples,start):
-            received.append((samples.copy(),start))
-            return {'points':[[start,220.0]],'method':'FCPE'}
-        with patch.object(core,'pitch',side_effect=detector):
-            for audio_id in ['a',aid]:
-                r=self.client.get('/api/audio_analysis/'+audio_id,params={'start_s':.2,'end_s':1.8,'kind':'pitch'})
-                self.assertEqual(r.status_code,200,r.text)
-        self.assertEqual(len(received),2)
-        np.testing.assert_array_equal(received[0][0],received[1][0])
-        self.assertEqual(received[0][1],received[1][1])
+        self.assertEqual(imported.json()['pitch_results'], 1)
+        core.pitch_store._digest.cache_clear()
+        with patch.object(core, 'pitch', side_effect=AssertionError('import must restore pitch')):
+            r=self.client.get('/api/audio_analysis/'+aid, params=params)
+            self.assertEqual(r.status_code,200,r.text)
+            self.assertEqual(r.json(),pitch_before)
         r=self.client.get('/api/audio_range/'+aid,params={'start_s':.5,'end_s':1.25,'download':False})
         self.assertEqual(r.status_code,200,r.text)
         with wave.open(io.BytesIO(r.content),'rb') as f:
             self.assertAlmostEqual(f.getnframes()/f.getframerate(),.75,places=3)
+
+    def test_legacy_cache_is_exported_and_imported(self):
+        _, src = core._find_audio('a')
+        result = {'start':.2,'end':1.8,'points':[[.2,220.0]],'method':'FCPE'}
+        key = core.pitch_store.legacy_key(src,.2,1.8)
+        (core.WAVEFORM_DIR / (key+'.json')).write_text(json.dumps(result))
+        exported = self.client.get('/api/export/profile/p')
+        self.assertEqual(exported.status_code,200)
+        with zipfile.ZipFile(io.BytesIO(exported.content)) as z:
+            self.assertTrue(any(n.startswith('pitch/') for n in z.namelist()))
+        with patch.object(core,'pitch',side_effect=AssertionError('legacy migration must not infer')):
+            r = self.client.get('/api/audio_analysis/a',params={'start_s':.2,'end_s':1.8,'kind':'pitch'})
+            self.assertEqual(r.status_code,200,r.text)
+            self.assertEqual(r.json()['points'],result['points'])
+
+    def test_changed_range_and_corrupt_cache_reanalyze(self):
+        params={'start_s':.2,'end_s':1.8,'kind':'pitch'}
+        with patch.object(core,'pitch',return_value={'points':[[.2,220.0]],'method':'FCPE'}) as detector:
+            self.assertEqual(self.client.get('/api/audio_analysis/a',params=params).status_code,200)
+            cached=next((core.WAVEFORM_DIR/'pitch').glob('*.json'))
+            cached.write_text('{broken')
+            self.assertEqual(self.client.get('/api/audio_analysis/a',params=params).status_code,200)
+            self.assertEqual(self.client.get('/api/audio_analysis/a',params=dict(params,end_s=2)).status_code,200)
+            self.assertEqual(detector.call_count,3)
+
+    def test_old_zip_without_pitch_remains_supported(self):
+        exported=self.client.get('/api/export/profile/p')
+        self.assertEqual(exported.status_code,200)
+        imported=self.client.post('/api/import',files={'file':('old.zip',exported.content,'application/zip')})
+        self.assertEqual(imported.status_code,200,imported.text)
+        self.assertEqual(imported.json()['pitch_results'],0)
+        self.assertEqual(imported.json()['pitch_warnings'],0)
+
+    def test_wrong_source_pitch_is_not_restored(self):
+        result={'start':.2,'end':1.8,'points':[[.2,220.0]],'method':'FCPE',
+                'source_sha256':'0'*64,'analysis_version':core.pitch_store.VERSION}
+        original=self.client.get('/api/export/profile/p')
+        buf=io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(original.content)) as source, zipfile.ZipFile(buf,'w') as archive:
+            for name in source.namelist(): archive.writestr(name,source.read(name))
+            archive.writestr('pitch/wrong.json',json.dumps(result))
+        imported=self.client.post('/api/import',files={'file':('wrong.zip',buf.getvalue(),'application/zip')})
+        self.assertEqual(imported.status_code,200,imported.text)
+        self.assertEqual(imported.json()['pitch_results'],0)
+        self.assertEqual(imported.json()['pitch_warnings'],1)
 
     def test_missing_original_rejected(self):
         (core.UPLOAD_DIR/'one.WAV').unlink()

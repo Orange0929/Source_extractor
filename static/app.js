@@ -65,11 +65,11 @@ async function loadPitch(token) {
   if (editorViewEnd - editorViewStart > 90) {
     pitchStatus.textContent = "피치는 90초 이내 대사 구간에서 표시돼요. 대사를 클릭해 주세요."; return;
   }
-  pitchStatus.textContent = "피치 분석 중… 처음에는 시간이 걸릴 수 있어요. 재생·구간 선택은 가능합니다.";
+  pitchStatus.textContent = "피치 불러오는 중… 저장된 결과가 없으면 분석합니다. 재생·구간 선택은 가능합니다.";
   try {
     const data = await analysisRequest("pitch", token);
     if (token !== editorLoadToken || request !== pitchRequest) return;
-    audioPlot.points = data.points; audioPlot.draw();
+    audioPlot.setPoints(data.points);
     pitchStatus.textContent = data.points.some(p => p[1] != null)
       ? "노란 선: FCPE 피치 · C4 = 가운데 도 · 무성음/불확실한 구간은 끊어서 표시 · 배경음이 있으면 오차 가능"
       : "이 구간에서는 신뢰할 수 있는 피치를 찾지 못했어요.";
@@ -87,8 +87,37 @@ document.getElementById("btnPitch").addEventListener("click", () => {
 });
 const waveSelection = document.getElementById("waveSelection");
 const wavePlayhead = document.getElementById("wavePlayhead");
-const waveZoom = document.getElementById("waveZoom");
-const waveZoomValue = document.getElementById("waveZoomValue");
+audioPlot.attachBars(document.getElementById("timeScroll"), document.getElementById("pitchScroll"));
+const btnExpandEditor = document.getElementById("btnExpandEditor");
+let editorPlaceholder = null;
+let previousBodyOverflow = "";
+function expandEditor(expand) {
+  if (expand === clipEditor.classList.contains("is-expanded")) return;
+  const start = audioPlot.hStart, end = audioPlot.hEnd;
+  if (expand) {
+    editorPlaceholder = document.createComment("editor position");
+    clipEditor.before(editorPlaceholder);
+    document.body.appendChild(clipEditor);
+    previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  } else {
+    if (editorPlaceholder?.isConnected) editorPlaceholder.replaceWith(clipEditor);
+    else document.querySelector("main").appendChild(clipEditor);
+    editorPlaceholder = null;
+    document.body.style.overflow = previousBodyOverflow;
+  }
+  clipEditor.classList.toggle("is-expanded", expand);
+  btnExpandEditor.setAttribute("aria-expanded", String(expand));
+  btnExpandEditor.textContent = expand ? "⛶ 원래 화면 (Esc)" : "⛶ 편집 화면 확대";
+  audioPlot.horizontal(start, end);
+  btnExpandEditor.focus({preventScroll:true});
+}
+btnExpandEditor.addEventListener("click", () => expandEditor(!clipEditor.classList.contains("is-expanded")));
+document.addEventListener("keydown", ev => {
+  if (ev.key === "Escape" && clipEditor.classList.contains("is-expanded")) {
+    ev.preventDefault(); expandEditor(false);
+  }
+});
 const sourceAudioPlayer = document.getElementById("sourceAudioPlayer");
 const rangeStart = document.getElementById("rangeStart");
 const rangeEnd = document.getElementById("rangeEnd");
@@ -365,6 +394,7 @@ function updateResultSummary() {
 
 function renderResults(items, append = false) {
   if (!append) {
+    expandEditor(false);
     clipEditor.remove();
     clipEditor.style.display = "none";
     activeEditorRow = null;
@@ -554,25 +584,6 @@ function loadSelectionPreview() {
   sourceAudioPlayer.load();
 }
 
-function applyWaveZoom() {
-  const zoom = Number(waveZoom.value || 1);
-  waveZoomValue.textContent = `${zoom}x`;
-  const centerRatio = editorDuration > 0 && waveformSurface.offsetWidth > 0
-    ? (waveformViewport.scrollLeft + waveformViewport.clientWidth / 2) / waveformSurface.offsetWidth
-    : 0;
-  waveformSurface.style.width = `${zoom * 100}%`;
-  audioPlot.draw();
-  updateSelectionUI(false);
-  requestAnimationFrame(() => {
-    if (centerRatio > 0) {
-      waveformViewport.scrollLeft = Math.max(
-        0,
-        waveformSurface.offsetWidth * centerRatio - waveformViewport.clientWidth / 2
-      );
-    }
-  });
-}
-
 function waitForMediaMetadata(media, token) {
   return new Promise((resolve, reject) => {
     const done = () => {
@@ -672,8 +683,7 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
     ? `원본 전체 ${formatTime(editorDuration)} 표시 중`
     : `파형 ${visibleLength.toFixed(3)}초만 표시 중 · Whisper ${selectedLength.toFixed(3)}초 + 앞뒤 최대 ${Number(waveContextSeconds.value || 0)}초`;
   manualTranscript.value = transcript || "";
-  waveZoom.value = "1";
-  applyWaveZoom();
+  audioPlot.horizontal(0, 1);
 
   const start = preferredStart == null ? 0 : Number(preferredStart);
   const end = preferredEnd == null ? Math.min(editorDuration, start + 1) : Number(preferredEnd);
@@ -774,7 +784,7 @@ rangeEnd.addEventListener("change", () => {
   setSelection(selectionStart, Number(rangeEnd.value));
   loadSelectionPreview();
 });
-waveZoom.addEventListener("input", applyWaveZoom);
+
 
 btnLoadWaveform.addEventListener("click", async () => {
   try {
@@ -1084,7 +1094,7 @@ importZip.addEventListener("change", async (ev) => {
 
     await refreshAudios();
     await doSearch();
-    alert(`가져오기 완료! (클립 ${res.clips ?? 0}개 / 오디오 ${res.audios ?? 0}개)`);
+    alert(`가져오기 완료! (클립 ${res.clips ?? 0}개 / 오디오 ${res.audios ?? 0}개 / 피치 ${res.pitch_results ?? 0}구간)` + (res.pitch_warnings ? `\n피치 ${res.pitch_warnings}구간은 저장본을 사용할 수 없어 열 때 다시 분석합니다.` : ""));
   } catch (e) {
     alert(e.message);
   } finally {

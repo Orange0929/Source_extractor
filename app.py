@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import pitch_store
 import os
 import re
 import uuid
@@ -245,6 +246,9 @@ def audio_timeline_source(src: Path) -> Path:
     fallback keeps app.py usable on its own.
     """
     return src
+
+# Export must never transcode an unopened source just to look for old caches.
+audio_timeline_cached_source = audio_timeline_source
 
 
 def ensure_clip_cache(clip: Dict[str, Any], audio: Dict[str, Any]) -> Path:
@@ -1033,7 +1037,20 @@ def api_audio_analysis(audio_id: str, start_s: float, end_s: float, kind: str = 
     stat = src.stat()
     key = hashlib.sha256(f"analysis-fcpe-v1|{src}|{stat.st_size}|{stat.st_mtime_ns}|{start_s:.6f}|{end_s:.6f}|{kind}".encode()).hexdigest()
     cache = WAVEFORM_DIR / f"{key}.json"
-    if cache.exists():
+    digest = None
+    if kind == "pitch":
+        digest = pitch_store.fingerprint(UPLOAD_DIR / audio["path"])
+        portable = WAVEFORM_DIR / "pitch" / (pitch_store.key(digest, start_s, end_s) + ".json")
+        if pitch_store.read(portable, digest) is not None:
+            return FileResponse(portable, media_type="application/json")
+        if cache.exists():
+            try:
+                legacy = json.loads(cache.read_text(encoding="utf-8"))
+                portable = pitch_store.save(WAVEFORM_DIR / "pitch", legacy, digest)
+                return FileResponse(portable, media_type="application/json")
+            except (OSError, ValueError, TypeError):
+                pass
+    elif cache.exists():
         return FileResponse(cache, media_type="application/json")
     if not _analysis_lock.acquire(blocking=False):
         return JSONResponse({"error": "다른 구간 분석 중이에요. 잠시 후 다시 시도해 주세요."}, status_code=429)
@@ -1042,6 +1059,9 @@ def api_audio_analysis(audio_id: str, start_s: float, end_s: float, kind: str = 
         samples = read_audio(src, start_s, end_s)
         result = pitch(samples, start_s) if kind == "pitch" else envelope(samples)
         result.update(start=start_s, end=end_s)
+        if kind == "pitch":
+            portable = pitch_store.save(WAVEFORM_DIR / "pitch", result, digest)
+            return FileResponse(portable, media_type="application/json")
         tmp.write_text(json.dumps(result, allow_nan=False), encoding="utf-8")
         tmp.replace(cache)
         return FileResponse(cache, media_type="application/json")
@@ -1392,8 +1412,21 @@ def api_export_profile(profile_id: str):
     zip_name = f"voice_share_{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
     zip_path = EXPORT_DIR / zip_name
 
+    # Content identity keeps results usable across renamed files and profile IDs.
+    digests = set()
+    for audio in audios:
+        original = UPLOAD_DIR / audio["path"]
+        digest = pitch_store.fingerprint(original)
+        digests.add(digest)
+        timeline = audio_timeline_cached_source(original)
+        if timeline.exists():
+            pitch_store.migrate(WAVEFORM_DIR, timeline, digest)
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as z:
         z.writestr("data.json", json.dumps(export_data, ensure_ascii=False, indent=2))
+        for cached in (WAVEFORM_DIR / "pitch").glob("*.json"):
+            result = pitch_store.read(cached)
+            if result and result["source_sha256"] in digests:
+                z.write(cached, arcname=f"pitch/{cached.name}")
 
         for a in audios:
             rel = a.get("path")
@@ -1523,6 +1556,22 @@ async def api_import(file: UploadFile = File(...)):
         shutil.rmtree(tmp_dir, ignore_errors=True)
         return JSONResponse({"error": "원본 파일 복사에 실패했어요. 저장 공간과 폴더 권한을 확인해 주세요."}, status_code=500)
 
+    # Old ZIPs without pitch results remain supported. Invalid/stale entries
+    # are skipped so they can be safely analyzed again when opened.
+    imported_pitch = 0
+    pitch_warnings = 0
+    digests = {pitch_store.fingerprint(dst) for _, dst in copy_plan}
+    for cached in (base_dir / "pitch").glob("*.json"):
+        result = pitch_store.read(cached)
+        if not result or result["source_sha256"] not in digests:
+            pitch_warnings += 1
+            continue
+        try:
+            pitch_store.save(WAVEFORM_DIR / "pitch", result, result["source_sha256"])
+            imported_pitch += 1
+        except OSError:
+            pitch_warnings += 1
+
     data = load_data()
     data["profiles"].append(new_profile)
     data["audios"].extend(new_audios)
@@ -1530,4 +1579,4 @@ async def api_import(file: UploadFile = File(...)):
     save_data(data)
 
     shutil.rmtree(tmp_dir, ignore_errors=True)
-    return {"ok": True, "imported_profile": new_profile, "clips": len(new_clips), "audios": len(new_audios)}
+    return {"ok": True, "imported_profile": new_profile, "clips": len(new_clips), "audios": len(new_audios), "pitch_results": imported_pitch, "pitch_warnings": pitch_warnings}
