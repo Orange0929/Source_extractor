@@ -588,10 +588,7 @@ function loadSelectionPreview() {
 function toggleCursorPlayback() {
   if (!editorAudioId || !audioPlot.data || editorViewEnd <= editorViewStart) return;
   if (editorTransport.active) { editorTransport.stop(); return; }
-  const start = clamp(editorTransport.cursor, editorViewStart, editorViewEnd);
-  if (editorViewEnd-start < .01) return;
-  editorTransport.prepare(editorAudioId, start, editorViewEnd, "cursor");
-  editorTransport.play();
+  editorTransport.playSelectionFromCursor(editorAudioId, selectionStart, selectionEnd);
 }
 document.addEventListener("keydown", ev => {
   if (ev.code !== "Space" || ev.ctrlKey || ev.altKey || ev.metaKey) return;
