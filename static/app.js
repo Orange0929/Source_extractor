@@ -394,6 +394,7 @@ function updateResultSummary() {
 
 function renderResults(items, append = false) {
   if (!append) {
+    editorTransport.stop();
     expandEditor(false);
     clipEditor.remove();
     clipEditor.style.display = "none";
@@ -573,16 +574,35 @@ function setSelection(start, end, scrollIntoView = false) {
   updateSelectionUI(scrollIntoView);
 }
 
-function loadSelectionPreview() {
-  if (!editorAudioId || selectionEnd - selectionStart < 0.01) return;
-  sourceAudioPlayer.pause();
-  const previewUrl = new URL(`/api/audio_range/${encodeURIComponent(editorAudioId)}`, window.location.origin);
-  previewUrl.searchParams.set("start_s", selectionStart.toFixed(6));
-  previewUrl.searchParams.set("end_s", selectionEnd.toFixed(6));
-  previewUrl.searchParams.set("download", "false");
-  sourceAudioPlayer.src = previewUrl.toString();
-  sourceAudioPlayer.load();
+function showEditorIndicator(time) {
+  const duration = editorViewEnd - editorViewStart;
+  wavePlayhead.style.display = duration > 0 ? "block" : "none";
+  if (duration > 0) wavePlayhead.style.left = `${clamp((time-editorViewStart)/duration,0,1)*100}%`;
 }
+const editorTransport = new EditorTransport(sourceAudioPlayer, showEditorIndicator,
+  () => loopSelection.checked, message => { waveformStatus.textContent = message; });
+function loadSelectionPreview() {
+  if (!editorAudioId || selectionEnd-selectionStart < .01) return;
+  editorTransport.prepare(editorAudioId, selectionStart, selectionEnd, "selection");
+}
+function toggleCursorPlayback() {
+  if (!editorAudioId || !audioPlot.data || editorViewEnd <= editorViewStart) return;
+  if (editorTransport.active) { editorTransport.stop(); return; }
+  const start = clamp(editorTransport.cursor, editorViewStart, editorViewEnd);
+  if (editorViewEnd-start < .01) return;
+  editorTransport.prepare(editorAudioId, start, editorViewEnd, "cursor");
+  editorTransport.play();
+}
+document.addEventListener("keydown", ev => {
+  if (ev.code !== "Space" || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+  const target = ev.target;
+  if (target.closest('input, textarea, select, audio, [contenteditable]:not([contenteditable="false"]), [role="slider"]')) return;
+  if (!clipEditor.isConnected || clipEditor.style.display === "none" || !audioPlot.data) return;
+  // Buttons retain their keyboard behavior outside the focused editor.
+  if (!clipEditor.classList.contains("is-expanded") && target.closest('button, a') && !clipEditor.contains(target)) return;
+  ev.preventDefault();
+  if (!ev.repeat) toggleCursorPlayback();
+});
 
 function waitForMediaMetadata(media, token) {
   return new Promise((resolve, reject) => {
@@ -627,6 +647,7 @@ function waitForImage(image, token) {
 async function loadWaveform(audioId, preferredStart = null, preferredEnd = null, transcript = "") {
   if (!audioId) throw new Error("원본 오디오를 선택하세요.");
 
+  editorTransport.stop();
   const token = ++editorLoadToken;
   if (analysisController) analysisController.abort();
   analysisController = new AbortController();
@@ -688,6 +709,7 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
   const start = preferredStart == null ? 0 : Number(preferredStart);
   const end = preferredEnd == null ? Math.min(editorDuration, start + 1) : Number(preferredEnd);
   setSelection(start, end, true);
+  editorTransport.place(start);
   loadSelectionPreview();
   audioPlot.draw();
   loadPitch(token);
@@ -724,9 +746,14 @@ function pointerTime(ev) {
 
 let dragMode = "";
 waveformSurface.addEventListener("pointerdown", (ev) => {
-  if (editorDuration <= 0) return;
+  if (editorDuration <= 0 || ev.button !== 0) return;
   ev.preventDefault();
-  sourceAudioPlayer.pause();
+  document.activeElement?.blur();
+  if (ev.target.closest(".wave-ruler")) {
+    editorTransport.place(pointerTime(ev));
+    return;
+  }
+  editorTransport.stop();
   waveformSurface.setPointerCapture(ev.pointerId);
   const t = pointerTime(ev);
   if (ev.target.classList.contains("left")) {
@@ -759,22 +786,6 @@ function finishWaveDrag(ev) {
 }
 waveformSurface.addEventListener("pointerup", finishWaveDrag);
 waveformSurface.addEventListener("pointercancel", finishWaveDrag);
-
-sourceAudioPlayer.addEventListener("timeupdate", () => {
-  const viewDuration = editorViewEnd - editorViewStart;
-  if (viewDuration > 0) {
-    wavePlayhead.style.display = "block";
-    const sourceTime = selectionStart + Number(sourceAudioPlayer.currentTime || 0);
-    const pct = clamp((sourceTime - editorViewStart) / viewDuration, 0, 1) * 100;
-    wavePlayhead.style.left = `${pct}%`;
-  }
-});
-
-sourceAudioPlayer.addEventListener("ended", () => {
-  if (!loopSelection.checked) return;
-  sourceAudioPlayer.currentTime = 0;
-  sourceAudioPlayer.play().catch(() => {});
-});
 
 rangeStart.addEventListener("change", () => {
   setSelection(Number(rangeStart.value), selectionEnd);
@@ -819,8 +830,9 @@ btnApplyWaveSettings.addEventListener("click", async () => {
 
 btnPlaySelection.addEventListener("click", () => {
   if (!editorAudioId || editorDuration <= 0) return alert("파형을 먼저 불러오세요.");
-  sourceAudioPlayer.currentTime = 0;
-  sourceAudioPlayer.play().catch(() => {});
+  editorTransport.place(selectionStart);
+  loadSelectionPreview();
+  editorTransport.play();
 });
 
 btnDownloadRange.addEventListener("click", () => {
@@ -1273,7 +1285,7 @@ elProfileSelect.addEventListener("change", async () => {
   selectedClipIds.clear();
   updateBulkDeleteButton();
   resetPlayer();
-  sourceAudioPlayer.pause();
+  editorTransport.stop();
   sourceAudioPlayer.removeAttribute("src");
   waveformViewport.style.display = "none";
   waveformStatus.textContent = "원본 오디오를 선택하세요.";

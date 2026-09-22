@@ -604,7 +604,7 @@ def score_contains(needle: str, hay: str) -> int:
 # =========================
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    static_files = tuple(BASE_DIR / "static" / name for name in ("style.css", "app.js", "audio_plot.js"))
+    static_files = tuple(BASE_DIR / "static" / name for name in ("style.css", "app.js", "audio_plot.js", "editor_transport.js"))
     asset_version = max((path.stat().st_mtime_ns for path in static_files), default=0)
     response = templates.TemplateResponse(
         request=request,
