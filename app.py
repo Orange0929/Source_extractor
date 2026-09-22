@@ -12,6 +12,7 @@ import shutil
 import mimetypes
 import math
 import hashlib
+import unicodedata
 from audio_analysis import read_audio, envelope, pitch
 from datetime import datetime
 from pathlib import Path
@@ -451,6 +452,107 @@ def norm_ko_sound(s: str) -> str:
 
 
 # =========================
+# Continuous phoneme normalize (Hangul + compatibility jamo + romanization)
+# =========================
+_PHONE_VOWELS = {
+    "yae": "ㅒ", "yeo": "ㅕ", "wae": "ㅙ", "weo": "ㅝ",
+    "ae": "ㅐ", "eo": "ㅓ", "eu": "ㅡ", "oe": "ㅚ", "ui": "ㅢ",
+    "ya": "ㅑ", "ye": "ㅖ", "yo": "ㅛ", "yu": "ㅠ",
+    "wa": "ㅘ", "wo": "ㅝ", "we": "ㅞ", "wi": "ㅟ",
+    "a": "ㅏ", "e": "ㅔ", "i": "ㅣ", "o": "ㅗ", "u": "ㅜ",
+}
+_PHONE_CONSONANTS = {
+    "kk": "ㄲ", "tt": "ㄸ", "pp": "ㅃ", "ss": "ㅆ", "jj": "ㅉ",
+    "ch": "ㅊ", "ng": "ㅇ",
+    "g": "ㄱ", "k": "ㅋ", "n": "ㄴ", "d": "ㄷ", "t": "ㅌ",
+    "r": "ㄹ", "l": "ㄹ", "m": "ㅁ", "b": "ㅂ", "p": "ㅍ",
+    "s": "ㅅ", "j": "ㅈ", "h": "ㅎ",
+}
+_PHONE_ROMA = sorted(
+    {**_PHONE_VOWELS, **_PHONE_CONSONANTS}.items(),
+    key=lambda item: len(item[0]), reverse=True,
+)
+_COMPAT_JAMO = set(_CHO + _JUNG + _JONG[1:])
+_LOOSE_PHONE = {
+    "ㄲ": "ㄱ", "ㅋ": "ㄱ",
+    "ㄸ": "ㄷ", "ㅌ": "ㄷ",
+    "ㅃ": "ㅂ", "ㅍ": "ㅂ",
+    "ㅆ": "ㅅ",
+    "ㅉ": "ㅈ", "ㅊ": "ㅈ",
+}
+
+
+def roman_to_ko_phones(text: str) -> str:
+    """Greedy RR-like input parser: `u do`, `udo` -> `ㅜㄷㅗ`."""
+    raw = re.sub(r"[^a-z]", "", (text or "").lower())
+    out: List[str] = []
+    i = 0
+    while i < len(raw):
+        for key, phone in _PHONE_ROMA:
+            if raw.startswith(key, i):
+                out.append(phone)
+                i += len(key)
+                break
+        else:
+            i += 1
+    return "".join(out)
+
+
+def norm_continuous_phones(text: str, loose: bool = False) -> str:
+    """Flatten spoken Korean into a substring-searchable phone stream.
+
+    Silent onset ㅇ is omitted, so `u do`, `우도`, and `ㅜ도` share exactly
+    the same key. Final ㅇ remains an audible /ng/ phone.
+    """
+    text = unicodedata.normalize("NFC", text or "")
+    items = decompose_syllables_ko(text)
+    apply_liaison(items)
+    apply_assimilation(items)
+    phones: List[str] = []
+    for item in items:
+        if item["type"] == "hangul":
+            onset = item.get("cho") or ""
+            if onset != "ㅇ":
+                phones.append(onset)
+            phones.append(item.get("jung") or "")
+            final = simplify_final_for_pron(item.get("jong") or "")
+            if final:
+                phones.append(final)
+            continue
+        value = item.get("val") or ""
+        if value in _COMPAT_JAMO:
+            phones.append(value)
+        elif re.fullmatch(r"[A-Za-z]", value):
+            # Consecutive letters were split by decompose_syllables_ko, so the
+            # complete Latin runs are handled below instead.
+            continue
+
+    # Preserve the original order for mixed input such as `ㅜ do`: replace
+    # each Latin run in-place, while Hangul/jamo were already normalized above.
+    if re.search(r"[A-Za-z]", text):
+        phones = []
+        for part in re.findall(r"[A-Za-z]+|[^A-Za-z]+", text):
+            if re.fullmatch(r"[A-Za-z]+", part):
+                phones.extend(roman_to_ko_phones(part))
+            else:
+                subitems = decompose_syllables_ko(part)
+                apply_liaison(subitems); apply_assimilation(subitems)
+                for item in subitems:
+                    if item["type"] == "hangul":
+                        onset = item.get("cho") or ""
+                        if onset != "ㅇ": phones.append(onset)
+                        phones.append(item.get("jung") or "")
+                        final = simplify_final_for_pron(item.get("jong") or "")
+                        if final: phones.append(final)
+                    elif (item.get("val") or "") in _COMPAT_JAMO:
+                        phones.append(item["val"])
+    result = "".join(phones)
+    if loose:
+        result = "".join(_LOOSE_PHONE.get(phone, phone) for phone in result)
+    return result
+
+
+# =========================
 # Japanese normalize + input conversions
 # =========================
 def is_hiragana(ch: str) -> bool:
@@ -855,6 +957,7 @@ def api_create_manual_clip(req: ManualClipRequest):
             "norm": norm_basic(transcript),
             "ko_pron_norm": norm_ko_sound(transcript),
             "jp_kana_norm": jp_kana_norm(transcript),
+            "continuous_norm": norm_continuous_phones(transcript),
             "created_at": now_iso(),
             "manual": True,
         }
@@ -889,7 +992,7 @@ def api_delete_clip(clip_id: str):
 def search_clips(q: str, profile_id: Optional[str], mode: str) -> List[Dict[str, Any]]:
     data = load_data()
     mode = (mode or "basic").lower()
-    if mode not in ("basic", "ko_sound", "jp_sound"):
+    if mode not in ("basic", "ko_sound", "jp_sound", "continuous"):
         mode = "basic"
 
     clips = data["clips"]
@@ -900,6 +1003,9 @@ def search_clips(q: str, profile_id: Optional[str], mode: str) -> List[Dict[str,
         needle = norm_basic(q)
     elif mode == "ko_sound":
         needle = norm_ko_sound(q)
+    elif mode == "continuous":
+        needle = norm_continuous_phones(q)
+        loose_needle = norm_continuous_phones(q, loose=True)
     else:
         raw = sanitize_text_keep_unicode(q)
         has_kana = any(is_hiragana(ch) or is_katakana(ch) for ch in raw)
@@ -933,6 +1039,15 @@ def search_clips(q: str, profile_id: Optional[str], mode: str) -> List[Dict[str,
             if not any(is_hangul_syllable(ch) for ch in txt):
                 continue
             hay = c.get("ko_pron_norm") or norm_ko_sound(txt)
+        elif mode == "continuous":
+            hay = c.get("continuous_norm") or norm_continuous_phones(txt)
+            strict_score = score_contains(needle, hay)
+            loose_hay = norm_continuous_phones(txt, loose=True)
+            loose_score = score_contains(loose_needle, loose_hay)
+            s = max(strict_score + 20 if strict_score else 0, loose_score)
+            if s > 0:
+                scored.append((s, c))
+            continue
         else:
             hay = c.get("jp_kana_norm") or jp_kana_norm(txt)
             if not hay:
@@ -1304,6 +1419,7 @@ def run_stt_job(job_id: str, profile_id: str, audio_id: str, saved_path: Path):
                 "norm": norm_basic(text),
                 "ko_pron_norm": norm_ko_sound(text),
                 "jp_kana_norm": jp_kana_norm(text),
+                "continuous_norm": norm_continuous_phones(text),
                 "created_at": now_iso(),
             }
             new_clips.append(clip)

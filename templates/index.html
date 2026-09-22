@@ -97,6 +97,7 @@
           <option value="basic" selected>기본(표기)</option>
           <option value="ko_sound">한국어 발음(연음/동화)</option>
           <option value="jp_sound">일본어 발음(로마자/한글→가나)</option>
+          <option value="continuous">연속음(로마자·한글·자모)</option>
         </select>
         <input id="searchInput" class="notranslate" placeholder="검색어" />
         <button id="btnSearch" class="notranslate">검색</button>
@@ -115,6 +116,7 @@
         <progress aria-label="프로필 불러오는 중"></progress>
         <span>프로필의 오디오와 대사를 불러오는 중…</span>
       </div>
+      <p id="searchModeHelp" class="hint search-mode-help notranslate"></p>
       <div id="results" class="results"></div>
       <button id="btnLoadMore" class="load-more ghost notranslate" type="button" style="display:none;">더 보기</button>
 
