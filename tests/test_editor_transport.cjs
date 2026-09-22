@@ -32,6 +32,22 @@ class Media extends EventTarget {
   loop=false;media.dispatchEvent(new Event('ended'));assert.equal(t.active,false);
   // Selection edits do not snap an independently placed cursor to their bounds.
   t.place(560);t.prepare('audio',552,555,'selection');assert.equal(t.cursor,560);assert.equal(shown.at(-1),560);
+  // Space playback stays inside selection, even with an outside edit cursor.
+  loop=false;
+  for (const [cursor, expectedStart] of [[550,552],[553,553],[555,552],[560,552]]) {
+    t.place(cursor);await t.playSelectionFromCursor('audio',552,555);
+    const url=new URL(media.src);
+    assert.equal(Number(url.searchParams.get('start_s')),expectedStart);
+    assert.equal(Number(url.searchParams.get('end_s')),555);
+    media.ended=true;media.paused=true;media.dispatchEvent(new Event('ended'));
+    assert.equal(t.active,false);assert.equal(shown.at(-1),cursor);
+  }
+  // First pass begins at the cursor; following loops cover the full selection.
+  loop=true;t.place(553);await t.playSelectionFromCursor('audio',552,555);
+  media.ended=true;media.paused=true;media.dispatchEvent(new Event('ended'));
+  assert.equal(t.origin,552);assert.equal(t.active,true);
+  assert.equal(Number(new URL(media.src).searchParams.get('end_s')),555);
+  t.stop();assert.equal(shown.at(-1),553);
   // Stopping while play() is pending must prevent a stale rejection affecting a newer play.
   let reject;
   media.play=()=>new Promise((_,r)=>{reject=r;});

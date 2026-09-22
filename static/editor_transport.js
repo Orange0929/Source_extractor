@@ -15,7 +15,11 @@ class EditorTransport {
     });
     media.addEventListener('ended', () => {
       if (this.active && this.mode === 'selection' && this.loop()) {
-        media.currentTime = 0; this.play();
+        const range = this.repeatRange;
+        if (range && this.origin !== range.start) {
+          this.prepare(range.audioId, range.start, range.end, 'selection');
+        } else media.currentTime = 0;
+        this.play();
       } else this.stop();
     });
   }
@@ -37,11 +41,21 @@ class EditorTransport {
   }
   prepare(audioId, start, end, mode) {
     this.stop(); this.origin = start; this.mode = mode;
+    this.repeatRange = {audioId, start, end};
     const url = new URL(`/api/audio_range/${encodeURIComponent(audioId)}`, window.location.origin);
     url.searchParams.set('start_s', start.toFixed(6));
     url.searchParams.set('end_s', end.toFixed(6));
     url.searchParams.set('download', 'false');
     this.media.src = url.toString(); this.media.load();
+  }
+  playSelectionFromCursor(audioId, selectionStart, selectionEnd) {
+    if (selectionEnd-selectionStart < .01) return;
+    // Keep the edit cursor independent, but never play outside the selection.
+    const start = this.cursor >= selectionStart && this.cursor <= selectionEnd-.01
+      ? this.cursor : selectionStart;
+    this.prepare(audioId, start, selectionEnd, 'selection');
+    this.repeatRange = {audioId, start: selectionStart, end: selectionEnd};
+    return this.play();
   }
   async play() {
     const serial = ++this.serial;
