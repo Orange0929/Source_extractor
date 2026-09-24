@@ -87,6 +87,21 @@ class SearchModesTest(unittest.TestCase):
     def test_empty_continuous_query_keeps_existing_list_behavior(self):
         self.assertEqual(len(app.search_clips('', 'p', 'continuous')), 4)
 
+    def test_coda_boundary_excludes_onset_and_fuzzy_matches(self):
+        data = app.load_data()
+        texts = ['난 아직', '신아', '나', '나는 나비', '난 나야', '난. 아직', '강을', '가늘']
+        data['clips'] = [{'id': str(i), 'profile_id': 'p', 'transcript': text}
+                         for i, text in enumerate(texts)]
+        app.DATA_PATH.write_text(json.dumps(data), encoding='utf-8')
+        for query in ['ㄴ아', 'ㄴ 아', 'ㄴ"아"', 'n 아', 'n a', 'ㄴㅏ']:
+            with self.subTest(query=query):
+                self.assertEqual({c['transcript'] for c in app.search_clips(query, 'p', 'continuous')},
+                                 {'난 아직', '신아'})
+        for query in ['ng을', 'ng 을', 'ㅇㅡㄹ']:
+            self.assertEqual([c['transcript'] for c in app.search_clips(query, 'p', 'continuous')], ['강을'])
+        self.assertIn('나', [c['transcript'] for c in app.search_clips('나', 'p', 'continuous')])
+        self.assertEqual(app.search_clips('ㅁ아', 'p', 'continuous'), [])
+
 
 if __name__ == '__main__':
     unittest.main()
