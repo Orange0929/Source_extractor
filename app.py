@@ -486,6 +486,41 @@ def roman_to_ko_phones(text: str) -> str:
     return "".join(out)
 
 
+def continuous_boundary_query(text: str):
+    """A leading standalone consonant requests a written coda boundary.
+
+    ㄴ아 / ㄴ 아 / ㄴ"아" / n 아 / n a are boundary queries; 나 / na
+    retain ordinary phone search. Keep this constraint outside fuzzy scoring.
+    """
+    raw = unicodedata.normalize('NFC', text or '').strip().lower()
+    match = re.fullmatch(r'([ㄱ-ㅎ])\s*["“\']?(.+?)["”\']?', raw)
+    if match:
+        coda, tail = match.groups()
+        if coda not in _JONG[1:]: return None
+    else:
+        match = re.fullmatch(r'(ng|kk|ss|[gkndtrlmbpsjch])(?:\s+|(?=[가-힣"“]))["“\']?(.+?)["”\']?', raw)
+        if not match: return None
+        coda = _PHONE_CONSONANTS.get(match[1])
+        tail = match[2]
+        if coda not in _JONG[1:]: return None
+    tail = norm_continuous_phones(tail)
+    return (coda, tail) if tail else None
+
+
+def matches_continuous_boundary(text: str, boundary) -> bool:
+    coda, tail = boundary
+    # Preserve original syllables: G2P liaison turns e.g. '신아' into '시나'
+    # and would erase the very coda origin the user explicitly requested.
+    raw = unicodedata.normalize('NFC', text or '')
+    for match in re.finditer(r'([가-힣])\s*(?=[가-힣])', raw):
+        final = _JONG[(ord(match[1]) - 0xAC00) % 28]
+        if final != coda: continue
+        following = re.match(r'[가-힣]+(?:[ \t]+[가-힣]+)*', raw[match.end():])
+        if following and norm_continuous_phones(following[0]).startswith(tail):
+            return True
+    return False
+
+
 def norm_continuous_phones(text: str, loose: bool = False) -> str:
     """Flatten spoken Korean into a substring-searchable phone stream.
 
@@ -989,6 +1024,7 @@ def search_clips(q: str, profile_id: Optional[str], mode: str) -> List[Dict[str,
     elif mode == "ko_sound":
         needle = norm_ko_sound(q)
     elif mode == "continuous":
+        boundary = continuous_boundary_query(q)
         needle = norm_continuous_phones(q)
         loose_needle = norm_continuous_phones(q, loose=True)
     else:
@@ -1027,6 +1063,10 @@ def search_clips(q: str, profile_id: Optional[str], mode: str) -> List[Dict[str,
             # The bounded pronunciation cache is keyed by transcript instead.
             hay = norm_ko_sound(txt)
         elif mode == "continuous":
+            if boundary:
+                if matches_continuous_boundary(txt, boundary):
+                    scored.append((120, c))
+                continue
             hay = norm_continuous_phones(txt)
             strict_score = score_contains(needle, hay)
             loose_hay = norm_continuous_phones(txt, loose=True)
