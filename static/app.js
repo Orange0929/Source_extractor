@@ -57,7 +57,7 @@ async function analysisRequest(kind, token) {
       await new Promise(resolve => setTimeout(resolve, 1000)); continue;
     }
     const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "분석 실패");
+    if (!response.ok) throw new Error(data.error || (typeof data.detail === "string" ? data.detail : "") || "분석 실패");
     return data;
   }
 }
@@ -196,14 +196,14 @@ function currentProfileId() {
 async function apiGet(url) {
   const res = await fetch(url);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "요청 실패");
+  if (!res.ok) throw new Error(data.error || (typeof data.detail === "string" ? data.detail : "") || "요청 실패");
   return data;
 }
 
 async function apiPostForm(url, formData) {
   const res = await fetch(url, { method: "POST", body: formData });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "요청 실패");
+  if (!res.ok) throw new Error(data.error || (typeof data.detail === "string" ? data.detail : "") || "요청 실패");
   return data;
 }
 
@@ -214,14 +214,14 @@ async function apiPostJson(url, obj) {
     body: JSON.stringify(obj || {})
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "요청 실패");
+  if (!res.ok) throw new Error(data.error || (typeof data.detail === "string" ? data.detail : "") || "요청 실패");
   return data;
 }
 
 async function apiDelete(url) {
   const res = await fetch(url, { method: "DELETE" });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || "삭제 실패");
+  if (!res.ok) throw new Error(data.error || (typeof data.detail === "string" ? data.detail : "") || "삭제 실패");
   return data;
 }
 
@@ -1043,7 +1043,7 @@ function uploadWithProgress(profileId, file, prefixText, onUploadProgress) {
       try {
         const data = JSON.parse(xhr.responseText || "{}");
         if (xhr.status >= 200 && xhr.status < 300) resolve(data);
-        else reject(new Error(data.error || "업로드 실패"));
+        else reject(new Error(data.error || (typeof data.detail === "string" ? data.detail : "") || "업로드 실패"));
       } catch (e) {
         reject(new Error("서버 응답 파싱 실패"));
       }
