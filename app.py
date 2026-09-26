@@ -65,7 +65,7 @@ _whisper_model: Optional[WhisperModel] = None
 DATA_LOCK = threading.Lock()
 
 def save_data_atomic(data: Dict[str, Any]):
-    tmp = DATA_PATH.with_suffix(".tmp")
+    tmp = DATA_PATH.with_name(DATA_PATH.name + "." + uuid.uuid4().hex + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(DATA_PATH)
 
@@ -211,7 +211,7 @@ def ffprobe_duration(path: Path) -> float:
              "-show_entries", "format=duration",
              "-of", "default=noprint_wrappers=1:nokey=1",
              str(path)],
-            stderr=subprocess.STDOUT
+            stderr=subprocess.STDOUT, timeout=60
         ).decode("utf-8").strip()
         return float(out) if out else 0.0
     except Exception:
@@ -761,6 +761,21 @@ def api_create_profile(name: str = Form(...)):
         data["profiles"].append({"id": pid, "name": name, "created_at": now_iso()})
         save_data(data)
     return {"ok": True, "profile": {"id": pid, "name": name}}
+
+
+@app.post("/api/profiles/{profile_id}/rename")
+def api_rename_profile(profile_id: str, name: str = Form(...)):
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "프로필 이름을 입력하세요.")
+    with DATA_LOCK:
+        data = load_data()
+        profile = next((p for p in data['profiles'] if p['id'] == profile_id), None)
+        if profile is None:
+            raise HTTPException(404, "프로필을 찾을 수 없어요.")
+        profile['name'] = name
+        save_data(data)
+    return {'ok': True, 'profile': profile}
 
 
 @app.delete("/api/profiles/{profile_id}")
@@ -1383,6 +1398,20 @@ def api_clip_audio(clip_id: str):
 # =========================
 # Jobs API + Cancel
 # =========================
+class JobBatchRequest(BaseModel):
+    ids: List[str]
+
+
+@app.post('/api/jobs/batch')
+def api_jobs_batch(req: JobBatchRequest):
+    if len(req.ids) > 1000:
+        raise HTTPException(400, "한 번에 1000개 이하로 조회하세요.")
+    with JOBS_LOCK:
+        jobs = {jid: {k:v for k,v in JOBS[jid].items() if not k.startswith('_')}
+                for jid in req.ids if jid in JOBS}
+    return {'jobs': jobs}
+
+
 @app.get("/api/jobs/{job_id}")
 def api_job(job_id: str):
     job = get_job(job_id)
@@ -1569,43 +1598,76 @@ def api_retry_incomplete(profile_id: str):
     return {'ok':True, 'jobs':jobs, 'missing':missing}
 
 
+# Cache by file identity, never by name alone. Recheck stat after replacement.
+_AUDIO_HASHES = {}
+
+
+def audio_digest(path):
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+    if key not in _AUDIO_HASHES:
+        digest = hashlib.sha256()
+        with path.open('rb') as f:
+            for block in iter(lambda: f.read(1024 * 1024), b''):
+                digest.update(block)
+        _AUDIO_HASHES[key] = digest.hexdigest()
+    return _AUDIO_HASHES[key]
+
+
 @app.post("/api/upload")
-async def api_upload(
-    profile_id: str = Form(...),
-    audio: UploadFile = File(...),
-):
-    # ... (프로필 체크는 그대로)
-
-    # 파일 저장은 락 밖에서 해도 됨 (IO 오래 걸릴 수 있음)
-    ext = Path(audio.filename or "").suffix.lower()
-    # ...
+def api_upload(profile_id: str = Form(...), audio: UploadFile = File(...)):
+    # Sync endpoint runs in a worker thread: hashing/probing must not block
+    # the event loop serving progress, playback, and desktop health requests.
+    data = load_data()
+    if not any(p['id'] == profile_id for p in data['profiles']):
+        raise HTTPException(404, "프로필을 찾을 수 없어요.")
     audio_id = str(uuid.uuid4())
-    saved_path = UPLOAD_DIR / f"{audio_id}{ext}"
-    saved_path.write_bytes(await audio.read())
-
-    audio_rec = {
-        "id": audio_id,
-        "profile_id": profile_id,
-        "orig_filename": audio.filename,
-        "path": saved_path.name,
-        "duration": ffprobe_duration(saved_path),
-        "created_at": now_iso(),
-    }
-
-    with DATA_LOCK:
-        data = load_data()
-        if not any(p["id"] == profile_id for p in data["profiles"]):
-            return JSONResponse({"error": "존재하지 않는 프로필이에요."}, status_code=400)
-        data["audios"].append(audio_rec)
-        save_data(data)
-
-    # job 생성/실행은 그대로
-    job_id = submit_audio_job(audio_rec)
-    if job_id is None:
-        return JSONResponse({"error": "프로필이 삭제되어 업로드를 취소했어요."}, status_code=409)
-
-    return {"ok": True, "job_id": job_id, "audio": audio_rec}
-
+    staged = UPLOAD_DIR / (audio_id + '.uploading')
+    digest = hashlib.sha256()
+    try:
+        with staged.open('wb') as out:
+            for block in iter(lambda: audio.file.read(1024 * 1024), b''):
+                digest.update(block)
+                out.write(block)
+        fingerprint = digest.hexdigest()
+        with RETRY_LOCK:
+            data = load_data()
+            candidates = [a for a in data['audios'] if a.get('profile_id') == profile_id]
+            match = None
+            for item in candidates:
+                path = UPLOAD_DIR / item['path']
+                if path.is_file() and path.stat().st_size == staged.stat().st_size:
+                    if audio_digest(path) == fingerprint:
+                        match = item
+                        break
+                elif not path.exists() and item.get('sha256') == fingerprint:
+                    staged.replace(path)  # restore known missing original
+                    match = item
+                    break
+            if match:
+                with JOBS_LOCK:
+                    active = next((jid for jid,j in JOBS.items() if j.get('audio_id') == match['id'] and
+                        (j.get('status') in ('queued','running') or
+                         (j.get('_future') is not None and not j['_future'].done()))), None)
+                complete = match.get('stt_status') == 'done' or any(c.get('audio_id') == match['id'] for c in data['clips'])
+                jid = active or (None if complete else submit_audio_job(match))
+                return {'ok':True, 'job_id':jid, 'audio':match, 'duplicate':True,
+                        'skipped':not jid, 'message':'기존 결과 재사용' if not jid else '기존 원본 분석 연결'}
+            saved_path = UPLOAD_DIR / (audio_id + Path(audio.filename or '').suffix.lower())
+            record = dict(id=audio_id, profile_id=profile_id, orig_filename=audio.filename,
+                          path=saved_path.name, duration=ffprobe_duration(staged),
+                          created_at=now_iso(), sha256=fingerprint)
+            with DATA_LOCK:
+                data = load_data()
+                if not any(p['id'] == profile_id for p in data['profiles']):
+                    raise HTTPException(409, "프로필이 삭제되어 업로드를 취소했습니다.")
+                staged.replace(saved_path)
+                data['audios'].append(record)
+                save_data(data)
+            jid = submit_audio_job(record)
+            return {'ok':True, 'job_id':jid, 'audio':record, 'duplicate':False}
+    finally:
+        staged.unlink(missing_ok=True)
 
 
 # =========================

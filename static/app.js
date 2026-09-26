@@ -295,6 +295,7 @@ async function refreshAudios(preferredAudioId = "") {
   url.searchParams.set("profile_id", pid);
   const data = await apiGet(url.toString());
   profileAudios = data.audios || [];
+  document.getElementById("audioCounts").textContent = `현재 프로필 원본 ${profileAudios.length}개 · 검색 결과는 파일 수가 아닌 대사 구간 수입니다.`;
 
   if (profileAudios.length === 0) {
     const opt = document.createElement("option");
@@ -938,7 +939,7 @@ function createJobCard(jobId, fileLabel) {
   return card;
 }
 
-function updateJobCard(card, job, prefixText) {
+function updateJobCard(card, job, prefixText, deferMaster = false) {
   const jobText = card.querySelector(".jobtext");
   const jobPct = card.querySelector(".jobpct");
   const jobProgress = card.querySelector(".jobprogress");
@@ -965,7 +966,7 @@ function updateJobCard(card, job, prefixText) {
     card.classList.add("jobcancel");
   }
 
-  updateMasterFromCards();
+  if (!deferMaster) updateMasterFromCards();
 }
 
 let jobRefreshTimer = null;
@@ -983,43 +984,43 @@ function scheduleJobRefresh() {
   }, 1500);
 }
 
-function startJobPolling(jobId, card, prefixText) {
-  stopJobPolling(jobId);
-  let polling = false;
-  const tick = async () => {
-    if (cancelAllRequested || polling) return;
-    polling = true;
-
-    try {
-      const data = await apiGet(`/api/jobs/${jobId}`);
-      const job = data.job;
-
-      updateJobCard(card, job, prefixText);
-
-      const st = (job.status || "").toLowerCase();
-      if (st === "done" || st === "error" || st === "cancelled") {
-        stopJobPolling(jobId);
-
-        // 완료되면 검색 자동 갱신
-        if (st === "done") {
-          scheduleJobRefresh();
-        }
+let batchPollTimer = null;
+let batchPollBusy = false;
+async function pollJobBatch() {
+  if (batchPollBusy || cancelAllRequested || !jobTimers.size) return;
+  batchPollBusy = true;
+  const entries = Array.from(jobTimers.entries()).slice(0, 1000);
+  try {
+    const response = await fetch('/api/jobs/batch', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids:entries.map(([id])=>id)}),
+      signal:AbortSignal.timeout(15000)});
+    if (!response.ok) throw new Error(`진행 조회 실패 (${response.status})`);
+    const data = await response.json();
+    for (const [id, views] of entries) {
+      const job = data.jobs[id] || {status:'error',progress:100,message:'서버에서 작업을 찾을 수 없습니다. 미완료 재분석을 사용하세요.'};
+      for (const {card, prefixText} of views) updateJobCard(card, job, prefixText, true);
+      if (['done','error','cancelled'].includes(job.status)) {
+        stopJobPolling(id);
+        scheduleJobRefresh();
       }
-    } catch (e) {
-      // 서버 리로드 등 일시 에러는 무시하고 계속
-    } finally { polling = false; }
-  };
-
-  tick();
-  const t = setInterval(tick, 700);
-  jobTimers.set(jobId, t);
+    }
+    updateMasterFromCards();
+  } catch (e) {
+    for (const [,views] of entries) for (const {card,prefixText} of views) {
+      card.querySelector('.jobtext').textContent = `${prefixText} / 서버 응답 대기 · 자동 재연결 중 (${e.message})`;
+    }
+  } finally { batchPollBusy = false; }
 }
-
+function startJobPolling(jobId, card, prefixText) {
+  const views = jobTimers.get(jobId) || [];
+  views.push({card,prefixText});
+  jobTimers.set(jobId, views);
+  if (batchPollTimer === null) batchPollTimer = setInterval(pollJobBatch, 1000);
+}
 function stopJobPolling(jobId) {
-  const t = jobTimers.get(jobId);
-  if (t) {
-    clearInterval(t);
-    jobTimers.delete(jobId);
+  jobTimers.delete(jobId);
+  if (!jobTimers.size && batchPollTimer !== null) {
+    clearInterval(batchPollTimer); batchPollTimer = null;
   }
 }
 
@@ -1030,6 +1031,8 @@ function uploadWithProgress(profileId, file, prefixText, onUploadProgress) {
     currentUploadXhr = xhr;
 
     xhr.open("POST", "/api/upload", true);
+    xhr.timeout = 300000;
+    xhr.ontimeout = () => reject(new Error("업로드 응답 시간 초과. 같은 파일을 다시 넣으면 중복 없이 확인합니다."));
 
     xhr.upload.onprogress = (evt) => {
       if (evt.lengthComputable && onUploadProgress) {
@@ -1111,6 +1114,18 @@ document.getElementById('btnRetryIncomplete').addEventListener('click', async ev
   } else if (elAudioFile.disabled) { alert('현재 업로드가 끝난 뒤 재분석해 주세요.'); }
 });
 
+document.getElementById('btnRenameProfile').addEventListener('click', async () => {
+  const pid = currentProfileId();
+  if (!pid) return alert('프로필을 선택하세요.');
+  const name = prompt('새 프로필 이름', elProfileSelect.selectedOptions[0].textContent);
+  if (name === null || !name.trim()) return;
+  try {
+    const fd = new FormData(); fd.append('name', name.trim());
+    await apiPostForm(`/api/profiles/${pid}/rename`, fd);
+    await refreshProfiles(); elProfileSelect.value = pid;
+  } catch (e) { alert(e.message); }
+});
+
 btnDeleteProfile.addEventListener("click", async () => {
   const pid = currentProfileId();
   if (!pid) return alert("삭제할 프로필이 없어요.");
@@ -1185,9 +1200,7 @@ if (btnCancelAll) {
 if (btnClearJobs) {
   btnClearJobs.addEventListener("click", () => {
     // 폴링 정리
-    for (const [jobId, t] of jobTimers.entries()) {
-      clearInterval(t);
-    }
+    for (const jobId of Array.from(jobTimers.keys())) stopJobPolling(jobId);
     jobTimers.clear();
 
     knownJobIds.clear();
@@ -1280,6 +1293,13 @@ uploadForm.addEventListener("submit", async (ev) => {
         card.classList.add("jobcancel");
         updateMasterFromCards();
         break;
+      }
+
+      if (res.skipped) {
+        tempUploadingIds.delete(tempJobId);
+        updateJobCard(card, {status:'done',progress:100,message:'동일 파일 · 기존 결과 재사용'}, prefix);
+        scheduleJobRefresh();
+        continue;
       }
 
       // 임시 job 카드 -> 진짜 jobId로 교체
