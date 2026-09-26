@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
 from concurrent.futures import ThreadPoolExecutor, Future
 
-from fastapi import FastAPI, File, Form, UploadFile, Request
+from fastapi import FastAPI, File, Form, UploadFile, Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -156,26 +156,25 @@ def _get_future(job_id: str) -> Optional[Future]:
 # Data utils (json DB) - 깨진 JSON 자동 복구
 # =========================
 def load_data() -> Dict[str, Any]:
-    if not DATA_PATH.exists():
-        return {"profiles": [], "audios": [], "clips": []}
-
+    # A read failure must never become an empty database. In particular,
+    # Windows may temporarily deny access to a perfectly valid JSON file.
     try:
-        txt = DATA_PATH.read_text(encoding="utf-8")
-        if not txt.strip():
-            return {"profiles": [], "audios": [], "clips": []}
+        txt = DATA_PATH.read_text(encoding="utf-8-sig")
         data = json.loads(txt)
-    except Exception:
-        try:
-            bak = DATA_PATH.with_suffix(f".broken.{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-            DATA_PATH.replace(bak)
-        except Exception:
-            pass
-        return {"profiles": [], "audios": [], "clips": []}
+        if not isinstance(data, dict):
+            raise ValueError("데이터 최상위 구조가 객체가 아닙니다.")
+        for key in ("profiles", "audios", "clips"):
+            if not isinstance(data.get(key), list):
+                raise ValueError(f"{key} 목록이 없거나 올바르지 않습니다.")
+        return data
+    except FileNotFoundError as exc:
+        # Only a genuinely new installation may start with empty data.
+        if not any(DATA_DIR.glob("data.broken.*.json")) and not any(UPLOAD_DIR.iterdir()):
+            return {"profiles": [], "audios": [], "clips": []}
+        raise HTTPException(status_code=503, detail="data.json이 없지만 기존 데이터가 남아 있습니다. 앱을 종료하고 데이터 파일을 복구해 주세요.") from exc
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail=f"저장 데이터 읽기 실패. 원본은 변경하지 않았습니다. 앱을 종료하고 data.json을 확인해 주세요. ({type(exc).__name__})") from exc
 
-    data.setdefault("profiles", [])
-    data.setdefault("audios", [])
-    data.setdefault("clips", [])
-    return data
 
 
 def save_data(data: Dict[str, Any]):
