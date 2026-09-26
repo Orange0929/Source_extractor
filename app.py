@@ -756,21 +756,34 @@ def api_create_profile(name: str = Form(...)):
     if not name:
         return JSONResponse({"error": "프로필 이름이 비어있어요."}, status_code=400)
 
-    data = load_data()
     pid = str(uuid.uuid4())
-    data["profiles"].append({"id": pid, "name": name, "created_at": now_iso()})
-    save_data(data)
+    with DATA_LOCK:
+        data = load_data()
+        data["profiles"].append({"id": pid, "name": name, "created_at": now_iso()})
+        save_data(data)
     return {"ok": True, "profile": {"id": pid, "name": name}}
 
 
 @app.delete("/api/profiles/{profile_id}")
 def api_delete_profile(profile_id: str):
+    with DATA_LOCK:
+        audio_ids = {a['id'] for a in load_data()['audios'] if a.get('profile_id') == profile_id}
+        with JOBS_LOCK:
+            if any(j.get('audio_id') in audio_ids and
+                   (j.get('status') in ('queued', 'running') or
+                    (j.get('_future') is not None and not j['_future'].done()))
+                   for j in JOBS.values()):
+                return JSONResponse({'error':'이 프로필의 분석 작업이 끝난 뒤 삭제해 주세요.'}, status_code=409)
+        return _delete_profile_locked(profile_id)
+
+
+def _delete_profile_locked(profile_id: str):
     data = load_data()
     if not any(p["id"] == profile_id for p in data["profiles"]):
         return JSONResponse({"error": "프로필을 찾을 수 없어요."}, status_code=404)
 
     clips_to_delete = [c for c in data["clips"] if c.get("profile_id") == profile_id]
-    audio_ids = set(c.get("audio_id") for c in clips_to_delete)
+    audio_ids = {a['id'] for a in data['audios'] if a.get('profile_id') == profile_id}
 
     data["profiles"] = [p for p in data["profiles"] if p.get("id") != profile_id]
     data["clips"] = [c for c in data["clips"] if c.get("profile_id") != profile_id]
@@ -1489,6 +1502,74 @@ def run_stt_job(job_id: str, profile_id: str, audio_id: str, saved_path: Path):
 # - 업로드는 지금 UI처럼 파일별로 요청해도 됨
 # - STT는 EXECUTOR에서 병렬로 돌아가서 "동시에 분석"이 됨
 # =========================
+RETRY_LOCK = threading.Lock()
+
+
+def submit_audio_job(audio):
+    """Record outcomes on the audio so retries survive application restarts."""
+    job_id = str(uuid.uuid4())
+    audio_id = audio['id']
+    with DATA_LOCK:
+        data = load_data()
+        if not any(a['id'] == audio_id for a in data['audios']):
+            return None
+        set_job(job_id, status='queued', progress=0, message='대기중...',
+                filename=audio.get('orig_filename') or audio['path'], audio_id=audio_id)
+        for item in data['audios']:
+            if item['id'] == audio_id:
+                item['stt_status'] = 'queued'
+                item['stt_job_id'] = job_id
+        save_data(data)
+
+    def worker():
+        try:
+            run_stt_job(job_id, audio['profile_id'], audio_id, UPLOAD_DIR / audio['path'])
+        except Exception as exc:
+            set_job(job_id, status='error', message=str(exc))
+        finally:
+            job = get_job(job_id) or {}
+            with DATA_LOCK:
+                data = load_data()
+                for item in data['audios']:
+                    if item['id'] == audio_id:
+                        item['stt_status'] = job.get('status', 'error')
+                        item['stt_message'] = job.get('message', '')
+                save_data(data)
+    try:
+        _set_future(job_id, EXECUTOR.submit(worker))
+    except Exception as exc:
+        set_job(job_id, status='error', message=str(exc))
+        raise
+    return job_id
+
+
+@app.post('/api/profiles/{profile_id}/retry-incomplete')
+def api_retry_incomplete(profile_id: str):
+    jobs = []
+    missing = []
+    with RETRY_LOCK:
+        data = load_data()
+        if not any(p['id'] == profile_id for p in data['profiles']):
+            return JSONResponse({'error':'프로필을 찾을 수 없어요.'}, status_code=404)
+        completed = {c.get('audio_id') for c in data['clips']}
+        with JOBS_LOCK:
+            active = {j.get('audio_id') for j in JOBS.values()
+                      if j.get('status') in ('queued', 'running') or
+                      (j.get('_future') is not None and not j['_future'].done())}
+        for audio in data['audios']:
+            if audio.get('profile_id') != profile_id: continue
+            # Legacy records have no status. Only retry those without clips.
+            # Never overwrite any existing (including manually edited) clip.
+            if audio['id'] in completed or audio['id'] in active or audio.get('stt_status') == 'done': continue
+            if not (UPLOAD_DIR / audio['path']).is_file():
+                missing.append(audio.get('orig_filename') or audio['path'])
+                continue
+            jid = submit_audio_job(audio)
+            if jid:
+                jobs.append({'job_id':jid, 'filename':audio.get('orig_filename') or audio['path']})
+    return {'ok':True, 'jobs':jobs, 'missing':missing}
+
+
 @app.post("/api/upload")
 async def api_upload(
     profile_id: str = Form(...),
@@ -1520,12 +1601,9 @@ async def api_upload(
         save_data(data)
 
     # job 생성/실행은 그대로
-    job_id = str(uuid.uuid4())
-    set_job(job_id, status="queued", progress=0, message="대기중...", clips_created=0,
-            filename=audio.filename or saved_path.name)
-
-    fut = EXECUTOR.submit(run_stt_job, job_id, profile_id, audio_id, saved_path)
-    _set_future(job_id, fut)
+    job_id = submit_audio_job(audio_rec)
+    if job_id is None:
+        return JSONResponse({"error": "프로필이 삭제되어 업로드를 취소했어요."}, status_code=409)
 
     return {"ok": True, "job_id": job_id, "audio": audio_rec}
 
