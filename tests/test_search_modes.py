@@ -87,6 +87,19 @@ class SearchModesTest(unittest.TestCase):
     def test_empty_continuous_query_keeps_existing_list_behavior(self):
         self.assertEqual(len(app.search_clips('', 'p', 'continuous')), 4)
 
+    def test_e_ae_are_equivalent_in_sound_searches(self):
+        data = app.load_data()
+        texts = ['네', '내', '난 에', '난 애']
+        data['clips'] = [{'id':str(i), 'profile_id':'p', 'transcript':text}
+                         for i, text in enumerate(texts)]
+        app.DATA_PATH.write_text(json.dumps(data), encoding='utf-8')
+        for mode in ('ko_sound', 'continuous'):
+            for query in ('ㅔ', 'ㅐ'):
+                self.assertEqual({c['transcript'] for c in app.search_clips(query, 'p', mode)}, set(texts))
+        for query in ('ㄴ에', 'ㄴ애', 'n e', 'n ae'):
+            self.assertEqual({c['transcript'] for c in app.search_clips(query, 'p', 'continuous')}, {'난 에', '난 애'})
+        self.assertEqual({c['transcript'] for c in app.search_clips('ㅐ', 'p', 'basic')}, {'내', '난 애'})
+
     def test_coda_boundary_excludes_onset_and_fuzzy_matches(self):
         data = app.load_data()
         texts = ['난 아직', '신아', '나', '나는 나비', '난 나야', '난. 아직', '강을', '가늘']

@@ -164,9 +164,9 @@ let activeClipBounds = null;
 const WAVE_CONTEXT_STORAGE_KEY = "sourceExtractor.waveContextSeconds";
 const SEARCH_MODE_HELP = {
   basic: "표기 그대로 검색 · 띄어쓰기/기호는 무시하지만 발음 변화나 다른 문자 표기는 변환하지 않습니다.",
-  ko_sound: "형태소 분석 기반 발음 검색 · 연음·동화·된소리·구개음화·ㅎ 변화·ㄴ 첨가·겹받침·7종성을 적용합니다. 사투리와 실제 발음 변형은 다를 수 있습니다.",
+  ko_sound: "형태소 분석 기반 발음 검색 · 연음·동화·된소리·구개음화·ㅎ 변화·ㄴ 첨가·겹받침·7종성을 적용합니다. ㅔ/ㅐ는 함께 검색합니다. 사투리와 실제 발음 변형은 다를 수 있습니다.",
   jp_sound: "가나를 기준으로 검색 · 로마자나 한글 입력은 일본어 가나로 추정 변환합니다.",
-  continuous: "음소열 검색 · u do / 우도 / ㅜ도 지원. 받침 연결은 ㄴ아 / ㄴ 아 / n a처럼 입력하세요. 원문에 ㄴ 받침 뒤 아가 이어진 구간만 찾으며, 단순 나는 제외합니다.",
+  continuous: "음소열 검색 · u do / 우도 / ㅜ도 지원. ㅔ/ㅐ는 함께 검색합니다. 받침 연결은 ㄴ아 / ㄴ 아 / n a처럼 입력하세요. 원문에 ㄴ 받침 뒤 아가 이어진 구간만 찾으며, 단순 나는 제외합니다.",
 };
 function updateSearchModeHelp() {
   searchModeHelp.textContent = SEARCH_MODE_HELP[elSearchMode.value] || SEARCH_MODE_HELP.basic;
