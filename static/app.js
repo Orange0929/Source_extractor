@@ -1074,15 +1074,41 @@ btnAddProfile.addEventListener("click", async () => {
 
     const fd = new FormData();
     fd.append("name", name);
-    await apiPostForm("/api/profiles", fd);
+    const created = await apiPostForm("/api/profiles", fd);
 
     elProfileName.value = "";
     await refreshProfiles();
+    elProfileSelect.value = created.profile.id;
     await refreshAudios();
     await doSearch();
   } catch (e) {
     alert(e.message);
   }
+});
+
+elProfileName.addEventListener('keydown', ev => {
+  if (ev.key === 'Enter' && !ev.isComposing) { ev.preventDefault(); btnAddProfile.click(); }
+});
+
+document.getElementById('btnRetryIncomplete').addEventListener('click', async ev => {
+  const pid = currentProfileId();
+  if (!pid) return alert('프로필을 선택하세요.');
+  if (!elAudioFile.disabled && confirm('현재 프로필의 결과 없는 음성을 저장된 원본으로 재분석할까요? 기존 소스는 유지됩니다.')) {
+    const button = ev.currentTarget;
+    button.disabled = true;
+    try {
+      const result = await apiPostJson(`/api/profiles/${pid}/retry-incomplete`, {});
+      cancelAllRequested = false;
+      for (const job of result.jobs) {
+        knownJobIds.add(job.job_id);
+        const card = createJobCard(job.job_id, job.filename);
+        startJobPolling(job.job_id, card, job.filename);
+      }
+      alert(`재분석 ${result.jobs.length}개 시작 · 원본 누락 ${result.missing.length}개` +
+        (result.missing.length ? '\n' + result.missing.join('\n') : ''));
+    } catch (e) { alert(e.message); }
+    finally { button.disabled = false; }
+  } else if (elAudioFile.disabled) { alert('현재 업로드가 끝난 뒤 재분석해 주세요.'); }
 });
 
 btnDeleteProfile.addEventListener("click", async () => {

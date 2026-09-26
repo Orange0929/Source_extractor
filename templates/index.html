@@ -33,7 +33,7 @@
 
       <div class="row">
         <input id="profileName" class="notranslate" placeholder="새 프로필 이름" />
-        <button id="btnAddProfile" class="notranslate">추가</button>
+        <button id="btnAddProfile" class="notranslate" type="button">새 프로필 추가</button>
       </div>
 
       <div class="row">
@@ -55,6 +55,8 @@
       <hr />
 
       <h2 class="notranslate">음성 추가</h2>
+      <button id="btnRetryIncomplete" class="ghost notranslate" type="button">실패·미완료 음성 재분석</button>
+      <p class="hint">기존 소스는 유지하고, 저장된 원본 중 결과가 없는 음성만 다시 분석합니다. 이전 버전에서는 무음 등 결과가 없었던 파일도 포함될 수 있습니다.</p>
       <form id="uploadForm">
         <input id="audioFile" class="notranslate" type="file" multiple accept=".wav,.mp3,.m4a,.flac,.ogg,.aac" />
         <button type="submit" class="notranslate">업로드</button>
