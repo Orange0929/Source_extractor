@@ -340,19 +340,23 @@ function updateMasterFromCards() {
 
   let sum = 0;
   let doneCount = 0;
+  let successCount = 0, errorCount = 0, cancelledCount = 0;
 
   for (const c of cards) {
     const pr = c.querySelector(".jobprogress");
     const v = pr ? Number(pr.value || 0) : 0;
-    sum += v;
-
     const st = (c.dataset.status || "").toLowerCase();
-    if (st === "done" || st === "error" || st === "cancelled") doneCount += 1;
+    const terminal = st === "done" || st === "error" || st === "cancelled";
+    sum += terminal ? 100 : v;
+    if (terminal) doneCount += 1;
+    if (st === "done") successCount += 1;
+    if (st === "error") errorCount += 1;
+    if (st === "cancelled") cancelledCount += 1;
   }
 
   const avg = Math.floor(sum / cards.length);
   masterProgress.value = Math.max(0, Math.min(100, avg));
-  masterPct.textContent = `${Math.max(0, Math.min(100, avg))}%`;
+  masterPct.textContent = `${Math.max(0, Math.min(100, avg))}% · 성공 ${successCount} / 실패 ${errorCount} / 취소 ${cancelledCount} / 진행·대기 ${cards.length - doneCount}`;
 
   // 전체 취소 버튼은 "작업이 존재할 때"만 켜두기
   if (btnCancelAll) btnCancelAll.disabled = (doneCount === cards.length);
@@ -964,11 +968,27 @@ function updateJobCard(card, job, prefixText) {
   updateMasterFromCards();
 }
 
+let jobRefreshTimer = null;
+let jobRefreshRunning = false;
+function scheduleJobRefresh() {
+  if (jobRefreshTimer !== null) return;
+  jobRefreshTimer = setTimeout(async () => {
+    jobRefreshTimer = null;
+    if (jobRefreshRunning) { scheduleJobRefresh(); return; }
+    jobRefreshRunning = true;
+    try {
+      await doSearch().catch(() => {});
+      await refreshAudios().catch(() => {});
+    } finally { jobRefreshRunning = false; }
+  }, 1500);
+}
+
 function startJobPolling(jobId, card, prefixText) {
   stopJobPolling(jobId);
-
+  let polling = false;
   const tick = async () => {
-    if (cancelAllRequested) return;
+    if (cancelAllRequested || polling) return;
+    polling = true;
 
     try {
       const data = await apiGet(`/api/jobs/${jobId}`);
@@ -982,13 +1002,12 @@ function startJobPolling(jobId, card, prefixText) {
 
         // 완료되면 검색 자동 갱신
         if (st === "done") {
-          await doSearch().catch(() => {});
-          await refreshAudios().catch(() => {});
+          scheduleJobRefresh();
         }
       }
     } catch (e) {
       // 서버 리로드 등 일시 에러는 무시하고 계속
-    }
+    } finally { polling = false; }
   };
 
   tick();
@@ -1256,7 +1275,7 @@ uploadForm.addEventListener("submit", async (ev) => {
 
       // ✅ 여기서부터 각 job 폴링을 "동시에" 시작
       startJobPolling(realJobId, card, prefix);
-      await refreshAudios(res.audio?.id || "").catch(() => {});
+      scheduleJobRefresh();
     }
 
     elAudioFile.value = "";

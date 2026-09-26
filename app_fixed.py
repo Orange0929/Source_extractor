@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 import subprocess
 import threading
 import uuid
@@ -228,6 +229,7 @@ def run_stt_job_fixed(job_id: str, profile_id: str, audio_id: str, saved_path: P
             )
 
     except Exception as exc:
+        logging.getLogger(__name__).exception('STT failed: job=%s source=%s', job_id, saved_path)
         if cancel_ev.is_set():
             core.set_job(job_id, status="cancelled", progress=0, message="취소됨", clips_created=0)
         else:
@@ -255,11 +257,9 @@ def _cleanup_timeline_cache(data: Dict[str, Any]) -> None:
 
 def save_data_fixed(data: Dict[str, Any]):
     _ORIGINAL_SAVE_DATA(data)
-    try:
-        _cleanup_timeline_cache(data)
-    except Exception:
-        # Cache cleanup must never make a DB save fail.
-        pass
+    # Do not sweep caches while STT workers may be reading them. A caller's
+    # snapshot is not a safe inventory of files currently in use. Orphan cache
+    # cleanup runs at startup before workers are submitted instead.
 
 
 # Patch the globals used by the already-registered FastAPI endpoints.
