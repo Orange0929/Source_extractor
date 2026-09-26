@@ -436,7 +436,7 @@ def syllables_to_jamo(items: List[Dict[str, str]]) -> str:
 
 
 def norm_ko_sound(s: str) -> str:
-    return norm_basic(pronounce(s))
+    return norm_basic(pronounce(s)).replace("ㅐ", "ㅔ")
 
 
 # =========================
@@ -569,7 +569,7 @@ def norm_continuous_phones(text: str, loose: bool = False) -> str:
     result = "".join(phones)
     if loose:
         result = "".join(_LOOSE_PHONE.get(phone, phone) for phone in result)
-    return result
+    return result.replace("ㅐ", "ㅔ")
 
 
 # =========================
