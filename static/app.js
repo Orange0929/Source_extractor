@@ -1025,14 +1025,17 @@ function stopJobPolling(jobId) {
 }
 
 // ===== Upload with upload-progress (XHR) =====
-function uploadWithProgress(profileId, file, prefixText, onUploadProgress) {
+function uploadWithProgress(profileId, file, prefixText, onUploadProgress, batchId) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     currentUploadXhr = xhr;
 
     xhr.open("POST", "/api/upload", true);
     xhr.timeout = 300000;
-    xhr.ontimeout = () => reject(new Error("업로드 응답 시간 초과. 같은 파일을 다시 넣으면 중복 없이 확인합니다."));
+    xhr.ontimeout = () => {
+      apiPostJson('/api/upload/client-error', {profile_id:profileId, filename:file.name, batch_id:batchId || '', reason:'응답 시간 초과 (300초)'}).catch(()=>{});
+      reject(new Error("업로드 응답 시간 초과. 같은 파일을 다시 넣으면 중복 없이 확인합니다."));
+    };
 
     xhr.upload.onprogress = (evt) => {
       if (evt.lengthComputable && onUploadProgress) {
@@ -1065,6 +1068,7 @@ function uploadWithProgress(profileId, file, prefixText, onUploadProgress) {
     const fd = new FormData();
     fd.append("profile_id", profileId);
     fd.append("audio", file);
+    fd.append("batch_id", batchId || "");
     xhr.send(fd);
   });
 }
@@ -1225,6 +1229,9 @@ uploadForm.addEventListener("submit", async (ev) => {
     const files = Array.from(elAudioFile.files || []);
     if (files.length === 0) return alert("오디오 파일을 선택하세요.");
 
+    if (!confirm(`${elProfileSelect.selectedOptions[0].textContent} 프로필에 ${files.length}개 파일을 추가할까요?`)) return;
+    const batchId = crypto.randomUUID();
+
     // 시작 시 상태 리셋
     cancelAllRequested = false;
     setMasterVisible(true);
@@ -1256,7 +1263,7 @@ uploadForm.addEventListener("submit", async (ev) => {
             // 업로드는 0~20으로 매핑해서 보여줌
             const mapped = Math.min(20, Math.floor(pct * 0.2));
             updateJobCard(card, { progress: mapped, message: `업로드중... (${pct}%)`, status: "running" }, "");
-          }
+          }, batchId
         );
       } catch (e) {
         // 전체 취소로 인한 abort 포함
