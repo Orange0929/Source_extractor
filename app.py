@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import pitch_store
+import activity_log
+import time
 import os
 import re
 import uuid
@@ -67,7 +69,20 @@ DATA_LOCK = threading.Lock()
 def save_data_atomic(data: Dict[str, Any]):
     tmp = DATA_PATH.with_name(DATA_PATH.name + "." + uuid.uuid4().hex + ".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(DATA_PATH)
+    for attempt in range(6):
+        try:
+            tmp.replace(DATA_PATH)
+            return
+        except PermissionError as exc:
+            audit('data_save_retry', attempt=attempt+1, error=str(exc), data_path=str(DATA_PATH))
+            if attempt == 5:
+                audit('data_save_failed', recovery_path=str(tmp), error=str(exc))
+                raise
+            time.sleep(0.05 * (2 ** attempt))
+
+
+def audit(action, **fields):
+    activity_log.event(DATA_DIR, action, **fields)
 
 
 def get_whisper_model() -> WhisperModel:
@@ -1158,6 +1173,63 @@ def api_search(
 # =========================
 # Original audio / waveform for manual range extraction
 # =========================
+class UploadClientEvent(BaseModel):
+    profile_id: str
+    filename: str
+    batch_id: str = ''
+    reason: str
+
+
+@app.post('/api/upload/client-error')
+def api_upload_client_error(req: UploadClientEvent):
+    audit('upload_client_error', **req.model_dump())
+    return {'ok': True}
+
+
+class MoveAudiosRequest(BaseModel):
+    source_profile_id: str
+    target_profile_id: str
+    audio_ids: List[str]
+
+
+@app.post('/api/audios/move')
+def api_move_audios(req: MoveAudiosRequest):
+    ids = set(req.audio_ids)
+    if not ids or req.source_profile_id == req.target_profile_id:
+        raise HTTPException(400, '이동할 원본과 서로 다른 프로필을 선택하세요.')
+    with RETRY_LOCK, DATA_LOCK:
+        data = load_data()
+        profiles = {p['id']:p.get('name', p['id']) for p in data['profiles']}
+        if req.source_profile_id not in profiles or req.target_profile_id not in profiles:
+            raise HTTPException(404, '프로필을 찾을 수 없습니다.')
+        selected = [a for a in data['audios'] if a['id'] in ids]
+        if len(selected) != len(ids) or any(a['profile_id'] != req.source_profile_id for a in selected):
+            raise HTTPException(409, '원본의 소속이 변경되었습니다. 목록을 다시 열어 주세요.')
+        with JOBS_LOCK:
+            busy = [j for j in JOBS.values() if j.get('audio_id') in ids and
+                    (j.get('status') in ('queued','running') or
+                     (j.get('_future') is not None and not j['_future'].done()))]
+        if busy:
+            raise HTTPException(409, '선택한 파일이 분석 중입니다. 완료 또는 취소 처리 후 이동하세요.')
+        # Snapshot before this explicit bulk edit, preserving existing originals.
+        backup = DATA_PATH.with_name('data.before-move.' + uuid.uuid4().hex + '.json')
+        backup.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+        for a in selected:
+            a['profile_id'] = req.target_profile_id
+        clips = [c for c in data['clips'] if c.get('audio_id') in ids]
+        for c in clips:
+            c['profile_id'] = req.target_profile_id
+        try:
+            save_data(data)
+        except Exception as exc:
+            audit('audio_move_failed', source=req.source_profile_id, target=req.target_profile_id, error=str(exc), backup=str(backup))
+            raise
+        audit('audio_move', source_profile_id=req.source_profile_id, source_profile_name=profiles[req.source_profile_id],
+              target_profile_id=req.target_profile_id, target_profile_name=profiles[req.target_profile_id],
+              audio_ids=sorted(ids), files=[a.get('orig_filename') for a in selected], clips=len(clips), backup=str(backup))
+    return {'ok':True, 'audios':len(selected), 'clips':len(clips)}
+
+
 @app.get("/api/audios")
 def api_list_audios(profile_id: Optional[str] = None):
     audios = load_data().get("audios", [])
@@ -1542,20 +1614,23 @@ def submit_audio_job(audio):
         if not any(a['id'] == audio_id for a in data['audios']):
             return None
         set_job(job_id, status='queued', progress=0, message='대기중...',
-                filename=audio.get('orig_filename') or audio['path'], audio_id=audio_id)
+                filename=audio.get('orig_filename') or audio['path'], audio_id=audio_id, profile_id=audio['profile_id'])
         for item in data['audios']:
             if item['id'] == audio_id:
                 item['stt_status'] = 'queued'
                 item['stt_job_id'] = job_id
         save_data(data)
 
+    audit('analysis_queued', job_id=job_id, audio_id=audio_id, profile_id=audio['profile_id'], filename=audio.get('orig_filename'))
     def worker():
+        audit('analysis_started', job_id=job_id, audio_id=audio_id, profile_id=audio['profile_id'])
         try:
             run_stt_job(job_id, audio['profile_id'], audio_id, UPLOAD_DIR / audio['path'])
         except Exception as exc:
             set_job(job_id, status='error', message=str(exc))
         finally:
             job = get_job(job_id) or {}
+            audit('analysis_finished', job_id=job_id, audio_id=audio_id, profile_id=audio['profile_id'], status=job.get('status'), message=job.get('message'), clips=job.get('clips_created'))
             with DATA_LOCK:
                 data = load_data()
                 for item in data['audios']:
@@ -1615,13 +1690,16 @@ def audio_digest(path):
 
 
 @app.post("/api/upload")
-def api_upload(profile_id: str = Form(...), audio: UploadFile = File(...)):
+def api_upload(profile_id: str = Form(...), audio: UploadFile = File(...), batch_id: str = Form('')):
     # Sync endpoint runs in a worker thread: hashing/probing must not block
     # the event loop serving progress, playback, and desktop health requests.
     data = load_data()
     if not any(p['id'] == profile_id for p in data['profiles']):
         raise HTTPException(404, "프로필을 찾을 수 없어요.")
     audio_id = str(uuid.uuid4())
+    batch_id = batch_id if isinstance(batch_id, str) else ''
+    context = dict(request_id=audio_id, profile_id=profile_id, profile_name=next(p.get('name', p['id']) for p in data['profiles'] if p['id']==profile_id), filename=audio.filename, batch_id=batch_id)
+    audit('upload_received', **context)
     staged = UPLOAD_DIR / (audio_id + '.uploading')
     digest = hashlib.sha256()
     try:
@@ -1630,6 +1708,7 @@ def api_upload(profile_id: str = Form(...), audio: UploadFile = File(...)):
                 digest.update(block)
                 out.write(block)
         fingerprint = digest.hexdigest()
+        audit("upload_hashed", **context, bytes=staged.stat().st_size, sha256=fingerprint)
         with RETRY_LOCK:
             data = load_data()
             candidates = [a for a in data['audios'] if a.get('profile_id') == profile_id]
@@ -1645,6 +1724,7 @@ def api_upload(profile_id: str = Form(...), audio: UploadFile = File(...)):
                     match = item
                     break
             if match:
+                audit('upload_duplicate', **context, existing_audio_id=match['id'])
                 with JOBS_LOCK:
                     active = next((jid for jid,j in JOBS.items() if j.get('audio_id') == match['id'] and
                         (j.get('status') in ('queued','running') or
@@ -1656,7 +1736,7 @@ def api_upload(profile_id: str = Form(...), audio: UploadFile = File(...)):
             saved_path = UPLOAD_DIR / (audio_id + Path(audio.filename or '').suffix.lower())
             record = dict(id=audio_id, profile_id=profile_id, orig_filename=audio.filename,
                           path=saved_path.name, duration=ffprobe_duration(staged),
-                          created_at=now_iso(), sha256=fingerprint)
+                          created_at=now_iso(), sha256=fingerprint, upload_batch_id=batch_id)
             with DATA_LOCK:
                 data = load_data()
                 if not any(p['id'] == profile_id for p in data['profiles']):
@@ -1664,8 +1744,12 @@ def api_upload(profile_id: str = Form(...), audio: UploadFile = File(...)):
                 staged.replace(saved_path)
                 data['audios'].append(record)
                 save_data(data)
+            audit('upload_registered', **context, audio_id=record['id'], saved_path=str(saved_path))
             jid = submit_audio_job(record)
             return {'ok':True, 'job_id':jid, 'audio':record, 'duplicate':False}
+    except Exception as exc:
+        audit('upload_failed', **context, error_type=type(exc).__name__, error=str(exc))
+        raise
     finally:
         staged.unlink(missing_ok=True)
 

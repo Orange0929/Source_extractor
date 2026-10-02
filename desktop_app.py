@@ -1,6 +1,7 @@
 """Windows WebView2 host with a narrow local-only update bridge."""
 from __future__ import annotations
 import json
+import activity_log
 import logging
 import os
 from pathlib import Path
@@ -79,7 +80,12 @@ class DesktopApi:
                 f'local server: {self._url}',
                 '\n[state]\n' + json.dumps(state, ensure_ascii=False, indent=2),
             ]
+            try:
+                sections.append('\n[data inventory]\n' + json.dumps(activity_log.inventory(self._root), ensure_ascii=False, indent=2))
+            except Exception as exc:
+                sections.append(f'\n[data inventory error]\n{type(exc).__name__}: {exc}')
             for label, path in (
+                *[(f'activity.jsonl{suffix}', self._root/'.desktop'/f'activity.jsonl{suffix}') for suffix in ('.3','.2','.1','')],
                 ('app.log', self._root/'.desktop'/'app.log'),
                 ('server.log', self._root/'.desktop'/'server.log'),
                 ('update.log', self._root/'.desktop'/'update.log'),
