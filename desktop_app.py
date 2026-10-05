@@ -28,6 +28,7 @@ class DesktopApi:
         self._root = root; self._url = url; self._token = token
         self._window = None; self._restart = False; self._closing = False; self._process = None
         self._lock = threading.Lock(); self._status_lock = threading.Lock()
+        self._preferences_lock = threading.Lock()
         self._latest = None
         self._close_reason = ''
         pending = read_state(root).get('pending')
@@ -76,7 +77,7 @@ class DesktopApi:
     def _remember_export_directory(self, directory):
         path = self._root/'.desktop'/'preferences.json'
         try:
-            with self._lock:
+            with self._preferences_lock:
                 try:
                     settings = json.loads(path.read_text(encoding='utf-8'))
                     if not isinstance(settings, dict): settings = {}
@@ -90,6 +91,10 @@ class DesktopApi:
     def save_audio_range(self, audio_id, start_s, end_s, filename):
         if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
         temp = None
+        stage = "prepare"
+        operation = uuid.uuid4().hex
+        def record(action, **fields):
+            activity_log.event(self._root, action, operation=operation, stage=stage, audio_id=audio_id, **fields)
         try:
             import webview
             audio_id = str(uuid.UUID(str(audio_id)))
@@ -103,9 +108,13 @@ class DesktopApi:
             name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename)).strip(' .')[:80] or '선택 구간'
             if Path(name).suffix.lower() in ('.wav','.mp3','.flac','.m4a','.aac','.ogg'):
                 name = Path(name).stem
+            stage = "dialog"
+            record("audio_export_started", start_s=start_s, end_s=end_s)
             selected = self._window.create_file_dialog(webview.SAVE_DIALOG,
                 directory=self._export_directory(), save_filename=name+'.'+ext, file_types=(f'{ext.upper()} audio (*.{ext})',))
-            if not selected: return {'cancelled':True}
+            if not selected:
+                record('audio_export_cancelled')
+                return {'cancelled':True}
             chosen = Path(selected[0] if isinstance(selected,(tuple,list)) else selected)
             target = chosen
             if target.suffix.lower() != '.'+ext:
@@ -117,16 +126,45 @@ class DesktopApi:
                 if not self._window.create_confirmation_dialog('파일 덮어쓰기', f'{target.name} 파일을 덮어쓸까요?'):
                     return {'cancelled':True}
             query = urllib.parse.urlencode(dict(start_s=start_s,end_s=end_s,filename=name))
-            temp = target.with_name('.'+target.name+'.'+uuid.uuid4().hex+'.tmp')
-            with urllib.request.urlopen(self._url+'/api/audio_range/'+audio_id+'?'+query, timeout=360) as response, temp.open('wb') as output:
-                shutil.copyfileobj(response, output)
-            temp.replace(target)
+            temp = target.with_name('source-extractor-'+operation+'.partial')
+            stage = 'download'
+            record('audio_export_downloading', target=str(target), temporary=str(temp))
+            request = urllib.request.Request(self._url+'/api/audio_range/'+audio_id+'?'+query, headers={'Connection':'close'})
+            with urllib.request.urlopen(request, timeout=60) as response, temp.open('wb') as output:
+                expected = response.headers.get('Content-Length') if hasattr(response, 'headers') else None
+                expected = int(expected) if expected is not None else None
+                received = 0
+                deadline = time.monotonic()+120
+                while True:
+                    if time.monotonic() > deadline:
+                        raise TimeoutError('오디오 다운로드 제한 시간을 초과했습니다.')
+                    chunk = response.read(min(65536, expected-received) if expected is not None else 65536)
+                    if not chunk: break
+                    output.write(chunk)
+                    received += len(chunk)
+                    if expected is not None and received == expected: break
+                if received == 0 or (expected is not None and received != expected):
+                    raise IOError(f'오디오 수신 불완료: {received}/{expected} bytes')
+            stage = 'finalize'
+            for attempt in range(4):
+                try:
+                    temp.replace(target)
+                    break
+                except PermissionError:
+                    if attempt == 3: raise
+                    time.sleep(.15*(attempt+1))
+            record('audio_export_completed', target=str(target), bytes=received)
             self._remember_export_directory(target.parent)
             return {'ok':True, 'path':str(target)}
         except Exception as exc:
-            return {'error':f'구간 저장 실패: {exc}'}
+            record('audio_export_failed', error_type=type(exc).__name__, error=str(exc))
+            return {'error':f'구간 저장 실패 ({stage}): {type(exc).__name__}: {exc}'}
         finally:
-            if temp is not None: temp.unlink(missing_ok=True)
+            if temp is not None:
+                try:
+                    temp.unlink(missing_ok=True)
+                except OSError as exc:
+                    record('audio_export_cleanup_failed', temporary=str(temp), error=str(exc))
 
     def save_diagnostic_log(self):
         if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
