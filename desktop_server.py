@@ -13,6 +13,7 @@ from collections import Counter
 def operation_label(scope):
     path = scope.get('path', '')
     for prefix, label in (
+        ('/api/desktop/audio-export/', '선택 구간 추출'),
         ('/api/upload', '오디오 업로드'), ('/api/import', '프로필 가져오기'),
         ('/api/export/', '프로필 내보내기'),
         ('/api/audio_analysis/', '피치 분석'), ('/api/audio_waveform/', '파형 분석'),
@@ -38,6 +39,8 @@ def blocks_close(scope):
     if scope.get('type') != 'http':
         return False
     path = scope.get('path', '')
+    if path.startswith('/api/desktop/audio-export/'):
+        return True
     if not path.startswith('/api/') or path.startswith('/api/desktop/'):
         return False
     return (scope.get('method', 'GET') not in ('GET', 'HEAD', 'OPTIONS') or
@@ -94,7 +97,7 @@ def main():
         async def __call__(self, scope, receive, send):
             nonlocal active
             tracked = blocks_close(scope)
-            api_request = scope['type']=='http' and scope['path'].startswith('/api/') and not scope['path'].startswith('/api/desktop/')
+            api_request = scope['type']=='http' and scope['path'].startswith('/api/') and (not scope['path'].startswith('/api/desktop/') or scope['path'].startswith('/api/desktop/audio-export/'))
             if api_request and closing:
                 await JSONResponse({'error':'앱을 재시작하는 중입니다.'},status_code=503)(scope,receive,send)
                 return

@@ -1,4 +1,5 @@
 import io
+import json
 import sys
 import tempfile
 import types
@@ -9,15 +10,6 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from desktop_app import DesktopApi
 
-class Response(io.BytesIO):
-    def __init__(self, data, length):
-        super().__init__(data)
-        self.headers={'Content-Length':str(length)}
-    def read(self,n=-1):
-        if self.tell() == len(self.getvalue()):
-            raise TimeoutError('server did not close connection')
-        return super().read(n)
-
 class ExportFailureTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
@@ -27,15 +19,19 @@ class ExportFailureTests(unittest.TestCase):
         for p in (patch.object(self.api,'_trusted',return_value=True),patch.dict(sys.modules,webview=types.SimpleNamespace(SAVE_DIALOG=1))):
             p.start();self.addCleanup(p.stop)
 
-    def save(self,response):
-        with patch('desktop_app.urllib.request.urlopen',side_effect=[io.BytesIO(b'{"extension":"wav"}'),response]):
+    def save(self, data=b'audio', expected=None):
+        cache=self.root/'clips_cache';cache.mkdir(exist_ok=True)
+        (cache/'range.wav').write_bytes(data)
+        response=io.BytesIO(json.dumps({'cache_file':'range.wav','bytes':len(data) if expected is None else expected}).encode())
+        opener=types.SimpleNamespace(open=lambda *a,**k:response)
+        with patch('desktop_app.urllib.request.urlopen',return_value=io.BytesIO(b'{"extension":"wav"}')),patch('desktop_app.urllib.request.build_opener',return_value=opener):
             return self.api.save_audio_range(str(uuid.uuid4()),0,1,'어라')
 
-    def test_content_length_finishes_without_waiting_for_connection_close(self):
+    def test_local_copy_does_not_wait_on_update_lock(self):
         # Update lock must not prevent remembering the export directory.
         self.api._lock.acquire()
         try:
-            result=self.save(Response(b'audio',5))
+            result=self.save()
         finally:self.api._lock.release()
         self.assertTrue(result['ok'])
         self.assertEqual(self.target.read_bytes(),b'audio')
@@ -43,14 +39,14 @@ class ExportFailureTests(unittest.TestCase):
 
     def test_incomplete_transfer_preserves_existing_file(self):
         self.target.write_bytes(b'old')
-        result=self.save(Response(b'ab',5))
+        result=self.save(b'ab',5)
         self.assertIn('error',result)
         self.assertEqual(self.target.read_bytes(),b'old')
         self.assertEqual(list(self.root.glob('*.partial')),[])
 
     def test_locked_cleanup_does_not_escape_bridge(self):
         with patch.object(Path,'unlink',side_effect=PermissionError('locked')):
-            result=self.save(Response(b'ab',5))
+            result=self.save(b'ab',5)
         self.assertIn('error',result)
         events=(self.root/'.desktop/activity.jsonl').read_text()
         self.assertIn('audio_export_failed',events)
@@ -65,7 +61,7 @@ class ExportFailureTests(unittest.TestCase):
                 if len(calls)==1:raise PermissionError('busy')
             return replace(path,target)
         with patch.object(Path,'replace',flaky),patch('desktop_app.time.sleep'):
-            self.assertTrue(self.save(Response(b'audio',5))['ok'])
+            self.assertTrue(self.save()['ok'])
         self.assertEqual(len(calls),2)
 
 if __name__=='__main__':unittest.main()
