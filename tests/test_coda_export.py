@@ -48,13 +48,13 @@ class ExportTests(unittest.TestCase):
             window=types.SimpleNamespace(create_file_dialog=lambda *a,**kw:str(target),create_confirmation_dialog=lambda *a:False)
             api._window=window
             with patch.object(api,'_trusted',return_value=True),patch.dict(sys.modules,webview=types.SimpleNamespace(SAVE_DIALOG=1)):
-                cache=root/'clips_cache';cache.mkdir();(cache/'range.mp3').write_bytes(b'audio')
-                prepared=json.dumps({'cache_file':'range.mp3','bytes':5}).encode()
-                opener=types.SimpleNamespace(open=lambda *a,**k:io.BytesIO(prepared))
-                with patch.object(desktop_app.urllib.request,'urlopen',return_value=io.BytesIO(b'{"extension":"mp3"}')),patch.object(desktop_app.urllib.request,'build_opener',return_value=opener):
+                def render(root,source,start,end,ext,target):
+                    target.write_bytes(b'audio')
+                    return 5
+                with patch.object(desktop_app,'source_info',return_value=(root/'source.mp3','mp3')),patch.object(desktop_app,'render_range',side_effect=render):
                     self.assertTrue(api.save_audio_range(str(uuid.uuid4()),0,1,'발음')['ok'])
                 self.assertEqual((root/'발음.mp3').read_bytes(),b'audio')
-                with patch.object(desktop_app.urllib.request,'urlopen',return_value=io.BytesIO(b'{"extension":"mp3"}')):
+                with patch.object(desktop_app,'source_info',return_value=(root/'source.mp3','mp3')):
                     self.assertTrue(api.save_audio_range(str(uuid.uuid4()),0,1,'발음')['cancelled'])
                 self.assertEqual((root/'발음.mp3').read_bytes(),b'audio')
 

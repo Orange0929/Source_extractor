@@ -6,6 +6,7 @@ import math
 import shutil
 import urllib.parse
 import activity_log
+from desktop_export import source_info, render_range
 import logging
 import os
 from pathlib import Path
@@ -29,6 +30,7 @@ class DesktopApi:
         self._window = None; self._restart = False; self._closing = False; self._process = None
         self._lock = threading.Lock(); self._status_lock = threading.Lock()
         self._preferences_lock = threading.Lock()
+        self._export_lock = threading.Lock()
         self._latest = None
         self._close_reason = ''
         pending = read_state(root).get('pending')
@@ -90,6 +92,8 @@ class DesktopApi:
 
     def save_audio_range(self, audio_id, start_s, end_s, filename):
         if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
+        if not self._export_lock.acquire(blocking=False):
+            return {"error":"다른 구간을 저장 중입니다. 완료 후 다시 시도하세요."}
         temp = None
         stage = "prepare"
         operation = uuid.uuid4().hex
@@ -101,10 +105,7 @@ class DesktopApi:
             start_s, end_s = float(start_s), float(end_s)
             if not all(math.isfinite(n) for n in (start_s,end_s)) or start_s < 0 or end_s-start_s < .01:
                 raise ValueError('올바른 구간을 선택하세요.')
-            with urllib.request.urlopen(self._url + '/api/audio_export_info/' + audio_id, timeout=15) as response:
-                ext = json.load(response)['extension']
-            if ext not in ('wav','mp3','flac','m4a','aac','ogg'):
-                raise ValueError('지원하지 않는 저장 형식입니다.')
+            source, ext = source_info(self._root, audio_id)
             name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename)).strip(' .')[:80] or '선택 구간'
             if Path(name).suffix.lower() in ('.wav','.mp3','.flac','.m4a','.aac','.ogg'):
                 name = Path(name).stem
@@ -125,39 +126,12 @@ class DesktopApi:
             if target != chosen and target.exists():
                 if not self._window.create_confirmation_dialog('파일 덮어쓰기', f'{target.name} 파일을 덮어쓸까요?'):
                     return {'cancelled':True}
-            query = urllib.parse.urlencode(dict(start_s=start_s,end_s=end_s,filename=name))
-            temp = target.with_name('source-extractor-'+operation+'.partial')
-            stage = 'render'
-            record('audio_export_render_requested', target=str(target))
-            request = urllib.request.Request(self._url+'/api/desktop/audio-export/'+audio_id+'?'+query,
-                method='POST', headers={'X-Desktop-Token':self._token})
-            # Local host/server share the same data folder. Transfer only metadata
-            # over HTTP; copy audio directly instead of streaming it via loopback.
-            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-            try:
-                with opener.open(request, timeout=360) as response:
-                    prepared = json.load(response)
-            except urllib.error.HTTPError as exc:
-                try:
-                    detail = json.loads(exc.read()).get('error')
-                except Exception:
-                    detail = None
-                raise RuntimeError(detail or f'추출 서버 오류: HTTP {exc.code}') from exc
-            cache_name = prepared['cache_file']
-            cache_root = (self._root/'clips_cache').resolve()
-            source = (cache_root/cache_name).resolve()
-            if source.parent != cache_root or source.suffix.lower() != '.'+ext:
-                raise ValueError('잘못된 추출 파일 경로입니다.')
-            expected = int(prepared['bytes'])
-            if expected <= 0 or source.stat().st_size != expected:
-                raise IOError('추출 파일 크기가 일치하지 않습니다.')
-            stage = 'copy'
-            record('audio_export_copy_started', temporary=str(temp), bytes=expected)
-            with source.open('rb') as incoming, temp.open('wb') as output:
-                shutil.copyfileobj(incoming, output, length=1024*1024)
-            received = temp.stat().st_size
-            if received != expected:
-                raise IOError(f'오디오 복사 불완료: {received}/{expected} bytes')
+            if target.resolve() == source:
+                raise ValueError('원본 오디오와 다른 파일명으로 저장하세요.')
+            temp = target.with_name('source-extractor-'+operation+'.partial.'+ext)
+            stage = 'render_local'
+            record('audio_export_local_started', target=str(target), temporary=str(temp))
+            received = render_range(self._root, source, start_s, end_s, ext, temp)
             stage = 'finalize'
             for attempt in range(4):
                 try:
@@ -178,6 +152,7 @@ class DesktopApi:
                     temp.unlink(missing_ok=True)
                 except OSError as exc:
                     record('audio_export_cleanup_failed', temporary=str(temp), error=str(exc))
+            self._export_lock.release()
 
     def save_diagnostic_log(self):
         if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
@@ -275,6 +250,8 @@ class DesktopApi:
 
     def _can_close(self):
         if self._closing: return True
+        if self._export_lock.locked():
+            return self._block_close('선택 구간 저장 중입니다. 완료 후 종료하세요.')
         self._close_reason = ''
         if not self._lock.acquire(blocking=False):
             with self._status_lock:

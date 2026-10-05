@@ -20,11 +20,13 @@ class ExportFailureTests(unittest.TestCase):
             p.start();self.addCleanup(p.stop)
 
     def save(self, data=b'audio', expected=None):
-        cache=self.root/'clips_cache';cache.mkdir(exist_ok=True)
-        (cache/'range.wav').write_bytes(data)
-        response=io.BytesIO(json.dumps({'cache_file':'range.wav','bytes':len(data) if expected is None else expected}).encode())
-        opener=types.SimpleNamespace(open=lambda *a,**k:response)
-        with patch('desktop_app.urllib.request.urlopen',return_value=io.BytesIO(b'{"extension":"wav"}')),patch('desktop_app.urllib.request.build_opener',return_value=opener):
+        source=self.root/'source.wav';source.write_bytes(b'original')
+        def render(root, source, start, end, ext, target):
+            target.write_bytes(data)
+            if expected is not None and expected != len(data):
+                raise IOError('render failed')
+            return len(data)
+        with patch('desktop_app.source_info',return_value=(source,'wav')),patch('desktop_app.render_range',side_effect=render):
             return self.api.save_audio_range(str(uuid.uuid4()),0,1,'어라')
 
     def test_local_copy_does_not_wait_on_update_lock(self):
@@ -35,14 +37,14 @@ class ExportFailureTests(unittest.TestCase):
         finally:self.api._lock.release()
         self.assertTrue(result['ok'])
         self.assertEqual(self.target.read_bytes(),b'audio')
-        self.assertEqual(list(self.root.glob('*.partial')),[])
+        self.assertEqual(list(self.root.glob('*.partial.*')),[])
 
     def test_incomplete_transfer_preserves_existing_file(self):
         self.target.write_bytes(b'old')
         result=self.save(b'ab',5)
         self.assertIn('error',result)
         self.assertEqual(self.target.read_bytes(),b'old')
-        self.assertEqual(list(self.root.glob('*.partial')),[])
+        self.assertEqual(list(self.root.glob('*.partial.*')),[])
 
     def test_locked_cleanup_does_not_escape_bridge(self):
         with patch.object(Path,'unlink',side_effect=PermissionError('locked')):
@@ -56,7 +58,7 @@ class ExportFailureTests(unittest.TestCase):
         replace=Path.replace
         calls=[]
         def flaky(path,target):
-            if path.suffix=='.partial':
+            if '.partial.' in path.name:
                 calls.append(path)
                 if len(calls)==1:raise PermissionError('busy')
             return replace(path,target)
