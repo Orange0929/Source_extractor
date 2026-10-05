@@ -43,9 +43,9 @@ class SearchModesTest(unittest.TestCase):
             matches = app.search_clips(value, 'p', 'continuous')
             self.assertEqual(matches[0]['id'], 'exact')
 
-    def test_strict_result_ranks_above_loose_consonant_match(self):
+    def test_only_matching_consonants_are_returned(self):
         matches = app.search_clips('u do', 'p', 'continuous')
-        self.assertEqual([item['id'] for item in matches[:2]], ['exact', 'aspirated'])
+        self.assertEqual([item['id'] for item in matches], ['exact'])
 
     def test_korean_sound_mode_does_not_change_meaning(self):
         self.assertEqual(app.search_clips('u do', 'p', 'ko_sound'), [])

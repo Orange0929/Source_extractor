@@ -65,6 +65,28 @@ class DesktopApi:
         if not self._trusted(): return {'phase':'error','message':'앱 화면을 확인하세요.'}
         with self._status_lock: return dict(self._status)
 
+    def _export_directory(self):
+        try:
+            settings = json.loads((self._root/'.desktop'/'preferences.json').read_text(encoding='utf-8'))
+            path = Path(settings.get('audio_export_directory') or '')
+            return str(path) if path.is_absolute() and path.is_dir() else ''
+        except (OSError, ValueError, TypeError, AttributeError):
+            return ''
+
+    def _remember_export_directory(self, directory):
+        path = self._root/'.desktop'/'preferences.json'
+        try:
+            with self._lock:
+                try:
+                    settings = json.loads(path.read_text(encoding='utf-8'))
+                    if not isinstance(settings, dict): settings = {}
+                except (OSError, ValueError):
+                    settings = {}
+                settings['audio_export_directory'] = str(directory.resolve())
+                atomic_json(path, settings)
+        except Exception:
+            logging.getLogger(__name__).exception('Could not remember audio export directory')
+
     def save_audio_range(self, audio_id, start_s, end_s, filename):
         if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
         temp = None
@@ -82,7 +104,7 @@ class DesktopApi:
             if Path(name).suffix.lower() in ('.wav','.mp3','.flac','.m4a','.aac','.ogg'):
                 name = Path(name).stem
             selected = self._window.create_file_dialog(webview.SAVE_DIALOG,
-                save_filename=name+'.'+ext, file_types=(f'{ext.upper()} audio (*.{ext})',))
+                directory=self._export_directory(), save_filename=name+'.'+ext, file_types=(f'{ext.upper()} audio (*.{ext})',))
             if not selected: return {'cancelled':True}
             chosen = Path(selected[0] if isinstance(selected,(tuple,list)) else selected)
             target = chosen
@@ -99,6 +121,7 @@ class DesktopApi:
             with urllib.request.urlopen(self._url+'/api/audio_range/'+audio_id+'?'+query, timeout=360) as response, temp.open('wb') as output:
                 shutil.copyfileobj(response, output)
             temp.replace(target)
+            self._remember_export_directory(target.parent)
             return {'ok':True, 'path':str(target)}
         except Exception as exc:
             return {'error':f'구간 저장 실패: {exc}'}
