@@ -1020,6 +1020,34 @@ def api_create_manual_clip(req: ManualClipRequest):
     return {"ok": True, "clip": clip}
 
 
+class TranscriptEditRequest(BaseModel):
+    transcript: str
+    expected_transcript: str
+
+
+@app.post("/api/clips/{clip_id}/transcript")
+def api_edit_transcript(clip_id: str, req: TranscriptEditRequest):
+    text = req.transcript.strip()
+    if not text or len(text) > 20000:
+        return JSONResponse({"error": "대사는 1~20,000자로 입력하세요."}, status_code=400)
+    keys = {"norm": norm_basic(text), "ko_pron_norm": norm_ko_sound(text),
+            "jp_kana_norm": jp_kana_norm(text), "continuous_norm": norm_continuous_phones(text)}
+    with DATA_LOCK:
+        data = load_data()
+        clip = next((c for c in data["clips"] if c.get("id") == clip_id), None)
+        if clip is None:
+            return JSONResponse({"error": "클립을 찾을 수 없어요."}, status_code=404)
+        if (clip.get("transcript") or "") != req.expected_transcript:
+            return JSONResponse({"error": "다른 화면에서 대사가 변경됐어요. 검색을 새로 한 뒤 다시 수정하세요."}, status_code=409)
+        clip.setdefault("original_transcript", clip.get("transcript") or "")
+        clip.update(keys)
+        clip["transcript"] = text
+        clip["transcript_edited_at"] = now_iso()
+        save_data(data)
+    audit("clip_transcript_edited", clip_id=clip_id, profile_id=clip.get("profile_id"), audio_id=clip.get("audio_id"))
+    return {"ok": True, "clip": clip}
+
+
 @app.delete("/api/clips/{clip_id}")
 def api_delete_clip(clip_id: str):
     data = load_data()
