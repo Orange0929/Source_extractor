@@ -502,6 +502,17 @@ function renderResults(items, append = false) {
     });
 
     rightBox.appendChild(right);
+    const editBtn = document.createElement("button");
+    editBtn.textContent = "대사 수정";
+    editBtn.className = "ghost notranslate";
+    editBtn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      if (await window.editClipTranscript(c)) {
+        resetPlayer();
+        try { await doSearch(false); } catch (e) { alert(e.message); }
+      }
+    });
+    rightBox.appendChild(editBtn);
     rightBox.appendChild(delBtn);
 
     m.appendChild(left);
