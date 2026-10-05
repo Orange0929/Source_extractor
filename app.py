@@ -1051,7 +1051,7 @@ def api_delete_clip(clip_id: str):
 # =========================
 # Search API
 # =========================
-def search_clips(q: str, profile_id: Optional[str], mode: str) -> List[Dict[str, Any]]:
+def search_clips(q: str, profile_id: Optional[str], mode: str, coda_only: bool = False) -> List[Dict[str, Any]]:
     data = load_data()
     mode = (mode or "basic").lower()
     if mode not in ("basic", "ko_sound", "jp_sound", "continuous"):
@@ -1060,6 +1060,17 @@ def search_clips(q: str, profile_id: Optional[str], mode: str) -> List[Dict[str,
     clips = data["clips"]
     if profile_id:
         clips = [c for c in clips if c.get("profile_id") == profile_id]
+
+    if coda_only and q.strip():
+        consonant = q.strip()
+        if len(consonant) == 1 and 0x11A8 <= ord(consonant) <= 0x11C2:
+            consonant = _JONG[ord(consonant) - 0x11A7]
+        if consonant not in _JONG[1:]:
+            raise HTTPException(400, '받침만 찾기는 ㄴ, ㅁ, ㄱ처럼 받침 자모 하나를 입력하세요.')
+        matches = [c for c in clips if any(
+            0xAC00 <= ord(ch) <= 0xD7A3 and _JONG[(ord(ch)-0xAC00) % 28] == consonant
+            for ch in unicodedata.normalize('NFC', c.get('transcript') or ''))]
+        return sorted(matches, key=lambda c: (c.get('created_at') or '', c.get('id') or ''), reverse=True)
 
     if mode == "basic":
         needle = norm_basic(q)
@@ -1143,8 +1154,9 @@ def api_search_ids(
     q: str = "",
     profile_id: Optional[str] = None,
     mode: str = "basic",
+    coda_only: bool = False,
 ):
-    matches = search_clips(q, profile_id, mode)
+    matches = search_clips(q, profile_id, mode, coda_only)
     return {"ids": [c.get("id") for c in matches if c.get("id")], "total": len(matches)}
 
 
@@ -1155,10 +1167,11 @@ def api_search(
     limit: int = 100,
     offset: int = 0,
     mode: str = "basic",
+    coda_only: bool = False,
 ):
     limit = min(500, max(1, int(limit)))
     offset = max(0, int(offset))
-    matches = search_clips(q, profile_id, mode)
+    matches = search_clips(q, profile_id, mode, coda_only)
     page = matches[offset:offset + limit]
     total = len(matches)
     return {
@@ -1376,6 +1389,19 @@ def api_audio_waveform(
     return FileResponse(cache_path, media_type="image/png")
 
 
+def source_export_format(audio):
+    ext = Path(audio.get('path') or audio.get('orig_filename') or '').suffix.lower().lstrip('.')
+    return ext if ext in ('wav','mp3','flac','m4a','aac','ogg') else 'wav'
+
+
+@app.get('/api/audio_export_info/{audio_id}')
+def api_audio_export_info(audio_id: str):
+    audio = next((a for a in load_data()['audios'] if a['id'] == audio_id), None)
+    if not audio:
+        raise HTTPException(404, '원본 오디오를 찾을 수 없습니다.')
+    return {'extension': source_export_format(audio)}
+
+
 @app.get("/api/audio_range/{audio_id}")
 def api_audio_range(
     audio_id: str,
@@ -1401,21 +1427,30 @@ def api_audio_range(
     if end_s - start_s < 0.01:
         return JSONResponse({"error": "구간 길이는 최소 0.01초여야 해요."}, status_code=400)
 
-    cache_path = CACHE_DIR / f"range_{audio_id}_{start_s:.6f}_{end_s:.6f}.wav"
+    # Preserve source container format for downloads; preview remains WAV.
+    ext = source_export_format(audio) if download else 'wav'
+    cache_path = CACHE_DIR / f"range_v2_{audio_id}_{start_s:.6f}_{end_s:.6f}.{ext}"
     if not cache_path.exists() or cache_path.stat().st_size == 0:
-        tmp = cache_path.with_name(f".{cache_path.stem}.{uuid.uuid4().hex}.tmp.wav")
+        tmp = cache_path.with_name(f".{cache_path.stem}.{uuid.uuid4().hex}.tmp.{ext}")
         try:
-            extract_clip(src, start_s, end_s, tmp)
+            codecs = {'wav':['-c:a','pcm_s16le'], 'mp3':['-c:a','libmp3lame','-q:a','2'],
+                      'flac':['-c:a','flac'], 'm4a':['-c:a','aac','-b:a','192k'],
+                      'aac':['-c:a','aac','-b:a','192k'], 'ogg':['-c:a','libvorbis','-q:a','5']}
+            subprocess.run(['ffmpeg','-y','-hide_banner','-loglevel','error',
+                            '-ss',f'{start_s:.6f}','-i',str(audio_timeline_source(src)),
+                            '-t',f'{end_s-start_s:.6f}','-vn',*codecs[ext],str(tmp)],
+                           check=True, capture_output=True, timeout=300)
             tmp.replace(cache_path)
-        except (OSError, subprocess.CalledProcessError) as exc:
-            return JSONResponse({"error": f"ffmpeg 실패: {exc}"}, status_code=500)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return JSONResponse({'error':f'구간 저장 실패: {exc}'},status_code=500)
         finally:
             tmp.unlink(missing_ok=True)
+    mime = {'wav':'audio/wav','mp3':'audio/mpeg','flac':'audio/flac','m4a':'audio/mp4','aac':'audio/aac','ogg':'audio/ogg'}[ext]
+    safe_base = make_safe_filename(filename, fallback='선택 구간', max_len=80)
+    if Path(safe_base).suffix.lower() in ('.wav','.mp3','.flac','.m4a','.aac','.ogg'):
+        safe_base = Path(safe_base).stem
+    return FileResponse(cache_path, media_type=mime, filename=f'{safe_base}.{ext}' if download else None)
 
-    if download:
-        safe_base = make_safe_filename(filename, fallback="선택 구간", max_len=80)
-        return FileResponse(cache_path, media_type="audio/wav", filename=f"{safe_base}.wav")
-    return FileResponse(cache_path, media_type="audio/wav")
 
 
 # =========================

@@ -1,6 +1,10 @@
 """Windows WebView2 host with a narrow local-only update bridge."""
 from __future__ import annotations
 import json
+import re
+import math
+import shutil
+import urllib.parse
 import activity_log
 import logging
 import os
@@ -60,6 +64,46 @@ class DesktopApi:
     def update_status(self):
         if not self._trusted(): return {'phase':'error','message':'앱 화면을 확인하세요.'}
         with self._status_lock: return dict(self._status)
+
+    def save_audio_range(self, audio_id, start_s, end_s, filename):
+        if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
+        temp = None
+        try:
+            import webview
+            audio_id = str(uuid.UUID(str(audio_id)))
+            start_s, end_s = float(start_s), float(end_s)
+            if not all(math.isfinite(n) for n in (start_s,end_s)) or start_s < 0 or end_s-start_s < .01:
+                raise ValueError('올바른 구간을 선택하세요.')
+            with urllib.request.urlopen(self._url + '/api/audio_export_info/' + audio_id, timeout=15) as response:
+                ext = json.load(response)['extension']
+            if ext not in ('wav','mp3','flac','m4a','aac','ogg'):
+                raise ValueError('지원하지 않는 저장 형식입니다.')
+            name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename)).strip(' .')[:80] or '선택 구간'
+            if Path(name).suffix.lower() in ('.wav','.mp3','.flac','.m4a','.aac','.ogg'):
+                name = Path(name).stem
+            selected = self._window.create_file_dialog(webview.SAVE_DIALOG,
+                save_filename=name+'.'+ext, file_types=(f'{ext.upper()} audio (*.{ext})',))
+            if not selected: return {'cancelled':True}
+            chosen = Path(selected[0] if isinstance(selected,(tuple,list)) else selected)
+            target = chosen
+            if target.suffix.lower() != '.'+ext:
+                if target.suffix.lower() in ('.wav','.mp3','.flac','.m4a','.aac','.ogg'):
+                    target = target.with_suffix('.'+ext)
+                else:
+                    target = Path(str(target)+'.'+ext)
+            if target != chosen and target.exists():
+                if not self._window.create_confirmation_dialog('파일 덮어쓰기', f'{target.name} 파일을 덮어쓸까요?'):
+                    return {'cancelled':True}
+            query = urllib.parse.urlencode(dict(start_s=start_s,end_s=end_s,filename=name))
+            temp = target.with_name('.'+target.name+'.'+uuid.uuid4().hex+'.tmp')
+            with urllib.request.urlopen(self._url+'/api/audio_range/'+audio_id+'?'+query, timeout=360) as response, temp.open('wb') as output:
+                shutil.copyfileobj(response, output)
+            temp.replace(target)
+            return {'ok':True, 'path':str(target)}
+        except Exception as exc:
+            return {'error':f'구간 저장 실패: {exc}'}
+        finally:
+            if temp is not None: temp.unlink(missing_ok=True)
 
     def save_diagnostic_log(self):
         if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
