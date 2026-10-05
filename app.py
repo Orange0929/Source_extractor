@@ -725,16 +725,7 @@ def score_contains(needle: str, hay: str) -> int:
         return 0
     if needle in hay:
         return 100
-    n = 3
-    if len(needle) < n or len(hay) < n:
-        return 0
-    a = {hay[i:i + n] for i in range(len(hay) - n + 1)}
-    b = {needle[i:i + n] for i in range(len(needle) - n + 1)}
-    if not a or not b:
-        return 0
-    inter = len(a & b)
-    union = len(a | b)
-    return int(100 * (inter / union))
+    return 0
 
 
 # =========================
@@ -1079,7 +1070,6 @@ def search_clips(q: str, profile_id: Optional[str], mode: str, coda_only: bool =
     elif mode == "continuous":
         boundary = continuous_boundary_query(q)
         needle = norm_continuous_phones(q)
-        loose_needle = norm_continuous_phones(q, loose=True)
     else:
         raw = sanitize_text_keep_unicode(q)
         has_kana = any(is_hiragana(ch) or is_katakana(ch) for ch in raw)
@@ -1096,6 +1086,8 @@ def search_clips(q: str, profile_id: Optional[str], mode: str, coda_only: bool =
             needle = ""
 
     if not needle:
+        if q.strip():
+            return []
         return sorted(
             clips,
             key=lambda c: ((c.get("created_at") or ""), (c.get("id") or "")),
@@ -1122,9 +1114,7 @@ def search_clips(q: str, profile_id: Optional[str], mode: str, coda_only: bool =
                 continue
             hay = norm_continuous_phones(txt)
             strict_score = score_contains(needle, hay)
-            loose_hay = norm_continuous_phones(txt, loose=True)
-            loose_score = score_contains(loose_needle, loose_hay)
-            s = max(strict_score + 20 if strict_score else 0, loose_score)
+            s = strict_score
             if s > 0:
                 scored.append((s, c))
             continue
