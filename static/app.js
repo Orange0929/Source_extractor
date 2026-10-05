@@ -244,6 +244,7 @@ function buildSearchUrl(path, extra = {}) {
   const url = new URL(path, window.location.origin);
   url.searchParams.set("q", elSearchInput.value || "");
   url.searchParams.set("mode", elSearchMode.value || "basic");
+  url.searchParams.set("coda_only", document.getElementById("codaOnly").checked ? "true" : "false");
   const pid = currentProfileId();
   if (pid) url.searchParams.set("profile_id", pid);
   for (const [key, value] of Object.entries(extra)) {
@@ -852,9 +853,18 @@ btnPlaySelection.addEventListener("click", () => {
   editorTransport.play();
 });
 
-btnDownloadRange.addEventListener("click", () => {
+btnDownloadRange.addEventListener("click", async () => {
   if (!editorAudioId || editorDuration <= 0) return alert("파형을 먼저 불러오세요.");
   if (selectionEnd - selectionStart < 0.01) return alert("받을 구간을 드래그해서 선택하세요.");
+  if (window.pywebview?.api?.save_audio_range) {
+    btnDownloadRange.disabled = true;
+    try {
+      const result = await window.pywebview.api.save_audio_range(editorAudioId, selectionStart, selectionEnd, manualTranscript.value || '선택 구간');
+      if (result.error) alert(result.error);
+    } catch(e) { alert(String(e)); }
+    finally { btnDownloadRange.disabled = false; }
+    return;
+  }
   const url = new URL(`/api/audio_range/${encodeURIComponent(editorAudioId)}`, window.location.origin);
   url.searchParams.set("start_s", selectionStart.toFixed(6));
   url.searchParams.set("end_s", selectionEnd.toFixed(6));
@@ -1498,3 +1508,8 @@ function escapeHtml(s) {
     alert(e.message);
   }
 })();
+
+document.getElementById('codaOnly').addEventListener('change', () => {
+  elSearchMode.disabled = document.getElementById('codaOnly').checked;
+  doSearch(false).catch(e => alert(e.message));
+});

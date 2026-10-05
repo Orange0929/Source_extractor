@@ -122,6 +122,7 @@
         <progress aria-label="프로필 불러오는 중"></progress>
         <span>프로필의 오디오와 대사를 불러오는 중…</span>
       </div>
+      <label class="hint"><input id="codaOnly" type="checkbox"> 받침만 찾기 (표기 기준 · 자모 1개, 예: ㄴ → 안)</label>
       <p id="searchModeHelp" class="hint search-mode-help notranslate"></p>
       <div id="results" class="results"></div>
       <button id="btnLoadMore" class="load-more ghost notranslate" type="button" style="display:none;">더 보기</button>
@@ -142,7 +143,7 @@
         <div class="editor-head">
           <div>
             <h2 id="editorClipTitle" class="notranslate">직접 구간 추출</h2>
-            <p class="hint notranslate">파형을 드래그한 뒤 선택한 부분을 바로 WAV로 받으세요.</p>
+            <p class="hint notranslate">파형을 드래그한 뒤 선택한 부분을 원본 형식으로 저장하세요.</p>
           </div>
           <button id="btnExpandEditor" type="button" class="ghost notranslate" aria-expanded="false" title="파형 편집 화면 확대 / Esc로 복귀">⛶ 편집 화면 확대</button>
         </div>
@@ -199,7 +200,7 @@
 
         <div class="row editor-actions">
           <button id="btnPlaySelection" class="ghost notranslate" type="button">선택 구간 재생</button>
-          <button id="btnDownloadRange" class="notranslate" type="button">선택 구간 WAV 받기</button>
+          <button id="btnDownloadRange" class="notranslate" type="button">선택 구간 저장</button>
           <label class="check-label notranslate"><input id="loopSelection" type="checkbox" checked /> 반복</label>
         </div>
 
