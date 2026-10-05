@@ -127,24 +127,37 @@ class DesktopApi:
                     return {'cancelled':True}
             query = urllib.parse.urlencode(dict(start_s=start_s,end_s=end_s,filename=name))
             temp = target.with_name('source-extractor-'+operation+'.partial')
-            stage = 'download'
-            record('audio_export_downloading', target=str(target), temporary=str(temp))
-            request = urllib.request.Request(self._url+'/api/audio_range/'+audio_id+'?'+query, headers={'Connection':'close'})
-            with urllib.request.urlopen(request, timeout=60) as response, temp.open('wb') as output:
-                expected = response.headers.get('Content-Length') if hasattr(response, 'headers') else None
-                expected = int(expected) if expected is not None else None
-                received = 0
-                deadline = time.monotonic()+120
-                while True:
-                    if time.monotonic() > deadline:
-                        raise TimeoutError('오디오 다운로드 제한 시간을 초과했습니다.')
-                    chunk = response.read(min(65536, expected-received) if expected is not None else 65536)
-                    if not chunk: break
-                    output.write(chunk)
-                    received += len(chunk)
-                    if expected is not None and received == expected: break
-                if received == 0 or (expected is not None and received != expected):
-                    raise IOError(f'오디오 수신 불완료: {received}/{expected} bytes')
+            stage = 'render'
+            record('audio_export_render_requested', target=str(target))
+            request = urllib.request.Request(self._url+'/api/desktop/audio-export/'+audio_id+'?'+query,
+                method='POST', headers={'X-Desktop-Token':self._token})
+            # Local host/server share the same data folder. Transfer only metadata
+            # over HTTP; copy audio directly instead of streaming it via loopback.
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            try:
+                with opener.open(request, timeout=360) as response:
+                    prepared = json.load(response)
+            except urllib.error.HTTPError as exc:
+                try:
+                    detail = json.loads(exc.read()).get('error')
+                except Exception:
+                    detail = None
+                raise RuntimeError(detail or f'추출 서버 오류: HTTP {exc.code}') from exc
+            cache_name = prepared['cache_file']
+            cache_root = (self._root/'clips_cache').resolve()
+            source = (cache_root/cache_name).resolve()
+            if source.parent != cache_root or source.suffix.lower() != '.'+ext:
+                raise ValueError('잘못된 추출 파일 경로입니다.')
+            expected = int(prepared['bytes'])
+            if expected <= 0 or source.stat().st_size != expected:
+                raise IOError('추출 파일 크기가 일치하지 않습니다.')
+            stage = 'copy'
+            record('audio_export_copy_started', temporary=str(temp), bytes=expected)
+            with source.open('rb') as incoming, temp.open('wb') as output:
+                shutil.copyfileobj(incoming, output, length=1024*1024)
+            received = temp.stat().st_size
+            if received != expected:
+                raise IOError(f'오디오 복사 불완료: {received}/{expected} bytes')
             stage = 'finalize'
             for attempt in range(4):
                 try:

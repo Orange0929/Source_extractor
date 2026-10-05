@@ -1470,6 +1470,32 @@ def api_audio_range(
     return FileResponse(cache_path, media_type=mime, filename=f'{safe_base}.{ext}' if download else None)
 
 
+@app.post("/api/desktop/audio-export/{audio_id}")
+def api_desktop_audio_export(audio_id: str, start_s: float, end_s: float, request: Request):
+    # Only the desktop host can obtain a local cache filename.
+    import secrets
+    token = os.environ.get("SOURCE_EXTRACTOR_SERVER_TOKEN", "")
+    if not token or not secrets.compare_digest(request.headers.get("X-Desktop-Token", ""), token):
+        raise HTTPException(403, "Forbidden")
+    audit("audio_export_render_started", audio_id=audio_id, start_s=start_s, end_s=end_s)
+    try:
+        response = api_audio_range(audio_id, start_s, end_s, download=True)
+        if not isinstance(response, FileResponse):
+            audit("audio_export_render_failed", audio_id=audio_id, status=response.status_code)
+            return response
+        path = Path(response.path).resolve()
+        if path.parent != CACHE_DIR.resolve():
+            raise RuntimeError("잘못된 추출 캐시 경로입니다.")
+        size = path.stat().st_size
+        if size <= 0:
+            raise RuntimeError("추출된 오디오가 비어 있습니다.")
+        audit("audio_export_render_completed", audio_id=audio_id, bytes=size)
+        return {"cache_file": path.name, "bytes": size}
+    except Exception as exc:
+        audit("audio_export_render_failed", audio_id=audio_id, error=str(exc))
+        raise
+
+
 
 # =========================
 # Clip audio (on-demand cut)

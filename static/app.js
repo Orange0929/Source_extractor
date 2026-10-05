@@ -872,7 +872,7 @@ btnDownloadRange.addEventListener("click", async () => {
     btnDownloadRange.textContent = "저장 중…";
     let saveTimer;
     try {
-      const result = await Promise.race([window.pywebview.api.save_audio_range(editorAudioId, selectionStart, selectionEnd, manualTranscript.value || '선택 구간'), new Promise((_, reject) => { saveTimer = setTimeout(() => reject(new Error('저장 응답이 지연됩니다. 저장 창이 열려 있으면 닫고, 대상 파일을 확인한 뒤 다시 시도하세요.')), 240000); })]);
+      const result = await Promise.race([window.pywebview.api.save_audio_range(editorAudioId, selectionStart, selectionEnd, manualTranscript.value || '선택 구간'), new Promise((_, reject) => { saveTimer = setTimeout(() => reject(new Error('저장 응답이 지연됩니다. 저장 창이 열려 있으면 닫고, 대상 파일을 확인한 뒤 다시 시도하세요.')), 420000); })]);
       if (result.error) alert(result.error);
     } catch(e) { alert(String(e)); }
     finally { clearTimeout(saveTimer); btnDownloadRange.disabled = false; btnDownloadRange.textContent = "선택 구간 저장"; }
