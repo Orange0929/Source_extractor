@@ -65,6 +65,14 @@ if not "%RC%"=="0" (
   exit /b %RC%
 )
 
+echo [INFO] Checking speech audio decoder... >> "%LOG%"
+call .venv\Scripts\python.exe speech_runtime_check.py 1>>"%LOG%" 2>>&1
+if errorlevel 1 (
+  echo [ERROR] Audio decoder check failed. See install_log.txt
+  pause
+  exit /b 1
+)
+
 echo [INFO] Checking Korean pronunciation engine... >> "%LOG%"
 call .venv\Scripts\python.exe -c "from korean_pronunciation import pronounce; pronounce('test'); pronounce(chr(54617)+chr(44368))" 1>>"%LOG%" 2>>&1
 if errorlevel 1 (
