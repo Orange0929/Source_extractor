@@ -167,6 +167,7 @@ def prepare_runtime(root, code, current, progress):
                      'import sys; sys.path.insert(0, sys.argv[1]); '
                      'from korean_pronunciation import pronounce; '
                      'assert pronounce("학교") == "학꾜"', str(code)], log)
+        run_install([python, code/'speech_runtime_check.py'], log)
         atomic_json(marker, {'complete': True})
     except Exception:
         shutil.rmtree(runtime, ignore_errors=True)
