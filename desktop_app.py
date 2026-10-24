@@ -154,37 +154,68 @@ class DesktopApi:
                     record('audio_export_cleanup_failed', temporary=str(temp), error=str(exc))
             self._export_lock.release()
 
+    def _reaper_executable(self):
+        import webview
+        from reaper_bridge import find_reaper, valid_executable
+        executable = find_reaper(self._root)
+        if executable is None:
+            selected = self._window.create_file_dialog(webview.OPEN_DIALOG,
+                file_types=('REAPER executable (*.exe)', 'All files (*.*)'))
+            if not selected: return None
+            executable = Path(selected[0] if isinstance(selected,(tuple,list)) else selected)
+            if not valid_executable(executable):
+                raise ValueError('REAPER 설치 폴더의 reaper.exe를 선택하세요.')
+            executable = executable.resolve()
+            with self._preferences_lock:
+                path = self._root/'.desktop'/'preferences.json'
+                try:
+                    settings = json.loads(path.read_text(encoding='utf-8'))
+                    if not isinstance(settings, dict): settings = {}
+                except (OSError, ValueError):
+                    settings = {}
+                settings['reaper_executable'] = str(executable)
+                atomic_json(path, settings)
+        return executable
+
+    def reaper_target_info(self):
+        if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
+        from reaper_bridge import read_target
+        return {'target':read_target(self._root)}
+
+    def set_reaper_target(self):
+        if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
+        if not self._export_lock.acquire(blocking=False): return {'error':'전송 중입니다. 완료 후 다시 시도하세요.'}
+        try:
+            from reaper_bridge import run_target_request, target_path
+            executable = self._reaper_executable()
+            if executable is None: return {'cancelled':True}
+            result = run_target_request(self._root, executable, 'capture')
+            if result.get('ok'):
+                atomic_json(target_path(self._root), result['target'])
+                activity_log.event(self._root, 'reaper_target_set', target=result['target'])
+            return result
+        except Exception as exc:
+            return {'error':f'REAPER 대상 지정 실패: {exc}'}
+        finally:
+            self._export_lock.release()
+
     def send_to_reaper(self, audio_id, start_s, end_s, filename):
         if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
         if not self._export_lock.acquire(blocking=False):
             return {'error':'다른 구간을 저장하거나 전송 중입니다. 완료 후 다시 시도하세요.'}
         temporary = None
         try:
-            import webview
-            from reaper_bridge import find_reaper, valid_executable, launch_reaper
+            from reaper_bridge import read_target, run_target_request
+            destination = read_target(self._root)
+            if destination is None:
+                return {'error':'REAPER에서 받을 프로젝트·트랙을 선택한 뒤 전송 대상 지정을 눌러주세요.', 'needs_target':True}
             audio_id = str(uuid.UUID(str(audio_id)))
             start_s, end_s = float(start_s), float(end_s)
             if not all(math.isfinite(n) for n in (start_s,end_s)) or start_s < 0 or end_s-start_s < .01:
                 raise ValueError('올바른 구간을 선택하세요.')
             source, _ = source_info(self._root, audio_id)
-            executable = find_reaper(self._root)
-            if executable is None:
-                selected = self._window.create_file_dialog(webview.OPEN_DIALOG,
-                    file_types=('REAPER executable (*.exe)', 'All files (*.*)'))
-                if not selected: return {'cancelled':True}
-                executable = Path(selected[0] if isinstance(selected,(tuple,list)) else selected)
-                if not valid_executable(executable):
-                    raise ValueError('REAPER 설치 폴더의 reaper.exe를 선택하세요.')
-                executable = executable.resolve()
-                with self._preferences_lock:
-                    path = self._root/'.desktop'/'preferences.json'
-                    try:
-                        settings = json.loads(path.read_text(encoding='utf-8'))
-                        if not isinstance(settings, dict): settings = {}
-                    except (OSError, ValueError):
-                        settings = {}
-                    settings['reaper_executable'] = str(executable)
-                    atomic_json(path, settings)
+            executable = self._reaper_executable()
+            if executable is None: return {'cancelled':True}
             folder = self._root/'reaper_media'
             folder.mkdir(exist_ok=True)
             name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename)).strip(' .')[:60] or '선택 구간'
@@ -195,9 +226,12 @@ class DesktopApi:
             activity_log.event(self._root, 'reaper_send_started', audio_id=audio_id, start_s=start_s, end_s=end_s)
             render_range(self._root, source, start_s, end_s, 'wav', temporary)
             temporary.replace(target)
-            launch_reaper(executable, target)
+            result = run_target_request(self._root, executable, 'insert', destination, target, name)
+            if result.get('error'):
+                activity_log.event(self._root, 'reaper_send_failed', audio_id=audio_id, error=result['error'], path=str(target))
+                return {**result, 'path':str(target)}
             activity_log.event(self._root, 'reaper_send_requested', audio_id=audio_id, path=str(target), executable=str(executable))
-            return {'ok':True, 'path':str(target), 'message':'REAPER로 삽입 요청을 보냈어요. REAPER 창에서 확인하세요.'}
+            return {'ok':True, 'path':str(target), 'message':f"삽입 완료: {result['project_name']} / {result['track_name']}"}
         except Exception as exc:
             activity_log.event(self._root, 'reaper_send_failed', audio_id=audio_id, error_type=type(exc).__name__, error=str(exc))
             return {'error':f'REAPER 전송 실패: {type(exc).__name__}: {exc}'}

@@ -1528,26 +1528,47 @@ document.getElementById('codaOnly').addEventListener('change', () => {
   doSearch(false).catch(e => alert(e.message));
 });
 
-// Native REAPER handoff; normal browser use keeps its existing controls.
+// Target is pinned independently from the active REAPER tab/selected track.
 (() => {
   const button = document.getElementById('btnSendReaper');
+  const choose = document.getElementById('btnSetReaperTarget');
+  const label = document.getElementById('reaperTargetLabel');
   const status = document.getElementById('reaperSendStatus');
-  function connect() {
-    button.hidden = !window.pywebview?.api?.send_to_reaper;
-    button.title = '선택 구간을 WAV로 보관한 뒤 REAPER에 삽입 요청합니다. 자동 감지가 안 되면 reaper.exe를 한 번 선택하세요. REAPER 6.80 이상이 필요합니다.';
+  function showTarget(target) {
+    label.textContent = target ? `${target.project_name} / ${target.track_name}` : '전송 대상 미지정';
+  }
+  async function connect() {
+    const available = !!window.pywebview?.api?.send_to_reaper;
+    button.hidden = choose.hidden = label.hidden = !available;
+    choose.title = 'REAPER에서 받을 프로젝트와 트랙을 선택한 뒤 누르세요. 현재 선택을 기억합니다.';
+    button.title = '지정한 프로젝트·트랙의 편집 커서에 삽입합니다. 삽입 후 커서는 아이템 끝으로 이동합니다.';
+    if (available) {
+      try { showTarget((await window.pywebview.api.reaper_target_info()).target); }
+      catch (e) { status.textContent = String(e); }
+    }
   }
   window.addEventListener('pywebviewready', connect);
   connect();
+  choose.addEventListener('click', async () => {
+    choose.disabled = button.disabled = true;
+    status.textContent = 'REAPER 전송 대상 확인 중…';
+    try {
+      const result = await window.pywebview.api.set_reaper_target();
+      if (result.target) showTarget(result.target);
+      status.textContent = result.error || (result.cancelled ? '대상 지정 취소' : '전송 대상을 기억했어요.');
+    } catch (e) { status.textContent = '대상 지정 실패: '+e; }
+    finally { choose.disabled = button.disabled = false; }
+  });
   button.addEventListener('click', async () => {
     if (!editorAudioId || editorDuration <= 0) return alert('파형을 먼저 불러오세요.');
     if (selectionEnd-selectionStart < .01) return alert('전송할 구간을 드래그해서 선택하세요.');
-    button.disabled = true;
+    choose.disabled = button.disabled = true;
     status.textContent = 'REAPER 전송 준비 중…';
     try {
       const result = await window.pywebview.api.send_to_reaper(editorAudioId, selectionStart, selectionEnd, manualTranscript.value || '선택 구간');
       status.textContent = result.error || (result.cancelled ? '전송 취소' : result.message);
       status.title = result.path || '';
     } catch (e) { status.textContent = 'REAPER 전송 실패: '+e; }
-    finally { button.disabled = false; }
+    finally { choose.disabled = button.disabled = false; }
   });
 })();
