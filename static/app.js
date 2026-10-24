@@ -1527,3 +1527,27 @@ document.getElementById('codaOnly').addEventListener('change', () => {
   updateSearchModeHelp();
   doSearch(false).catch(e => alert(e.message));
 });
+
+// Native REAPER handoff; normal browser use keeps its existing controls.
+(() => {
+  const button = document.getElementById('btnSendReaper');
+  const status = document.getElementById('reaperSendStatus');
+  function connect() {
+    button.hidden = !window.pywebview?.api?.send_to_reaper;
+    button.title = '선택 구간을 WAV로 보관한 뒤 REAPER에 삽입 요청합니다. 자동 감지가 안 되면 reaper.exe를 한 번 선택하세요. REAPER 6.80 이상이 필요합니다.';
+  }
+  window.addEventListener('pywebviewready', connect);
+  connect();
+  button.addEventListener('click', async () => {
+    if (!editorAudioId || editorDuration <= 0) return alert('파형을 먼저 불러오세요.');
+    if (selectionEnd-selectionStart < .01) return alert('전송할 구간을 드래그해서 선택하세요.');
+    button.disabled = true;
+    status.textContent = 'REAPER 전송 준비 중…';
+    try {
+      const result = await window.pywebview.api.send_to_reaper(editorAudioId, selectionStart, selectionEnd, manualTranscript.value || '선택 구간');
+      status.textContent = result.error || (result.cancelled ? '전송 취소' : result.message);
+      status.title = result.path || '';
+    } catch (e) { status.textContent = 'REAPER 전송 실패: '+e; }
+    finally { button.disabled = false; }
+  });
+})();
