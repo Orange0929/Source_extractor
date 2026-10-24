@@ -154,6 +154,59 @@ class DesktopApi:
                     record('audio_export_cleanup_failed', temporary=str(temp), error=str(exc))
             self._export_lock.release()
 
+    def send_to_reaper(self, audio_id, start_s, end_s, filename):
+        if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
+        if not self._export_lock.acquire(blocking=False):
+            return {'error':'다른 구간을 저장하거나 전송 중입니다. 완료 후 다시 시도하세요.'}
+        temporary = None
+        try:
+            import webview
+            from reaper_bridge import find_reaper, valid_executable, launch_reaper
+            audio_id = str(uuid.UUID(str(audio_id)))
+            start_s, end_s = float(start_s), float(end_s)
+            if not all(math.isfinite(n) for n in (start_s,end_s)) or start_s < 0 or end_s-start_s < .01:
+                raise ValueError('올바른 구간을 선택하세요.')
+            source, _ = source_info(self._root, audio_id)
+            executable = find_reaper(self._root)
+            if executable is None:
+                selected = self._window.create_file_dialog(webview.OPEN_DIALOG,
+                    file_types=('REAPER executable (*.exe)', 'All files (*.*)'))
+                if not selected: return {'cancelled':True}
+                executable = Path(selected[0] if isinstance(selected,(tuple,list)) else selected)
+                if not valid_executable(executable):
+                    raise ValueError('REAPER 설치 폴더의 reaper.exe를 선택하세요.')
+                executable = executable.resolve()
+                with self._preferences_lock:
+                    path = self._root/'.desktop'/'preferences.json'
+                    try:
+                        settings = json.loads(path.read_text(encoding='utf-8'))
+                        if not isinstance(settings, dict): settings = {}
+                    except (OSError, ValueError):
+                        settings = {}
+                    settings['reaper_executable'] = str(executable)
+                    atomic_json(path, settings)
+            folder = self._root/'reaper_media'
+            folder.mkdir(exist_ok=True)
+            name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', str(filename)).strip(' .')[:60] or '선택 구간'
+            if Path(name).suffix.lower() in ('.wav','.mp3','.flac','.m4a','.aac','.ogg'):
+                name = Path(name).stem
+            target = folder/(name+'_'+uuid.uuid4().hex+'.wav')
+            temporary = target.with_name('.'+target.stem+'.partial.wav')
+            activity_log.event(self._root, 'reaper_send_started', audio_id=audio_id, start_s=start_s, end_s=end_s)
+            render_range(self._root, source, start_s, end_s, 'wav', temporary)
+            temporary.replace(target)
+            launch_reaper(executable, target)
+            activity_log.event(self._root, 'reaper_send_requested', audio_id=audio_id, path=str(target), executable=str(executable))
+            return {'ok':True, 'path':str(target), 'message':'REAPER로 삽입 요청을 보냈어요. REAPER 창에서 확인하세요.'}
+        except Exception as exc:
+            activity_log.event(self._root, 'reaper_send_failed', audio_id=audio_id, error_type=type(exc).__name__, error=str(exc))
+            return {'error':f'REAPER 전송 실패: {type(exc).__name__}: {exc}'}
+        finally:
+            if temporary is not None:
+                try: temporary.unlink(missing_ok=True)
+                except OSError: pass
+            self._export_lock.release()
+
     def save_diagnostic_log(self):
         if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
         try:
@@ -251,7 +304,7 @@ class DesktopApi:
     def _can_close(self):
         if self._closing: return True
         if self._export_lock.locked():
-            return self._block_close('선택 구간 저장 중입니다. 완료 후 종료하세요.')
+            return self._block_close('선택 구간 저장·REAPER 전송 중입니다. 완료 후 종료하세요.')
         self._close_reason = ''
         if not self._lock.acquire(blocking=False):
             with self._status_lock:
