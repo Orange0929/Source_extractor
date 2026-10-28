@@ -2,110 +2,126 @@ import json
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 import uuid
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import reaper_bridge
+import reaper_bridge as bridge
 from desktop_app import DesktopApi
 
 class ReaperTests(unittest.TestCase):
     def setUp(self):
-        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
-        self.root=Path(self.temp.name);self.exe=self.root/'REAPER portable'/'reaper.exe'
-        self.exe.parent.mkdir();self.exe.write_bytes(b'test')
+        self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
+        self.root=Path(self.tmp.name)
         self.api=DesktopApi(self.root,'http://localhost','token')
-        self.api._window=types.SimpleNamespace(create_file_dialog=lambda *a,**k:str(self.exe))
+        self.destination=dict(project_id='project-1',instance='instance-1',track_guid='t1',project_name='A',track_name='1 · voice')
+        (self.root/'.desktop').mkdir()
+        bridge.target_path(self.root).write_text(json.dumps(self.destination))
         self.aid=str(uuid.uuid4())
-        self.destination=dict(session='session-1',project_pointer='p1',project_path='C:/A.rpp',track_guid='t1',project_name='A',track_name='1 · voice')
-        (self.root/'.desktop').mkdir(exist_ok=True)
-        reaper_bridge.target_path(self.root).write_text(json.dumps(self.destination))
-        for p in (patch.object(self.api,'_trusted',return_value=True),patch.dict(sys.modules,webview=types.SimpleNamespace(OPEN_DIALOG=1))):
-            p.start();self.addCleanup(p.stop)
+        p=patch.object(self.api,'_trusted',return_value=True);p.start();self.addCleanup(p.stop)
+
+    def heartbeat(self,session='instance-1',project='project-1',age=0):
+        folder=bridge.ipc_root(self.root)/session;folder.mkdir(parents=True,exist_ok=True)
+        data=dict(protocol=2,session=session,projects={project:True},updated=time.time()-age,active_project='A')
+        (folder/'heartbeat.json').write_text(json.dumps(data))
+        return folder
 
     def inventory(self):
         uploads=self.root/'uploads';uploads.mkdir()
         source=uploads/'source.wav'
         subprocess.run(['ffmpeg','-v','error','-f','lavfi','-i','sine=duration=1','-y',str(source)],check=True)
         (self.root/'data.json').write_text(json.dumps({'audios':[{'id':self.aid,'path':source.name}]}))
-        return source
 
-    def test_real_extract_persistent_handoff_and_discovery(self):
+    def test_real_extract_targets_ipc_without_launch(self):
         self.inventory()
-        with patch.object(reaper_bridge,'find_reaper',return_value=None),patch.object(reaper_bridge,'run_target_request',return_value={'ok':True,'project_name':'A','track_name':'1 · voice'}) as launch:
+        original=subprocess.Popen
+        def media_process(args,**kwargs):
+            self.assertIn(Path(args[0]).stem,('ffmpeg','ffprobe'))
+            return original(args,**kwargs)
+        with patch.object(bridge,'run_target_request',return_value={'ok':True,'project_name':'A','track_name':'1 · voice'}) as request,patch('subprocess.Popen',side_effect=media_process):
             result=self.api.send_to_reaper(self.aid,.2,.6,'한글 발음.wav')
             self.assertTrue(result.get('ok'),result)
-            path=Path(result['path'])
-            self.assertEqual(path.parent,self.root/'reaper_media')
-            self.assertTrue(path.is_file())
-            self.assertEqual(path.suffix,'.wav')
-            launch.assert_called_once_with(self.root,self.exe.resolve(),'insert',self.destination,path,'한글 발음')
+            path=Path(result['path']);self.assertTrue(path.is_file())
+            request.assert_called_once_with(self.root,None,'insert',self.destination,path,'한글 발음')
         duration=float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(path)]))
         self.assertAlmostEqual(duration,.4,delta=.005)
         self.assertFalse(self.api._export_lock.locked())
-        # A restarted host finds the remembered portable executable.
-        self.assertEqual(reaper_bridge.find_reaper(self.root),self.exe.resolve())
-        self.assertTrue(path.exists())
 
-    def test_launch_passes_only_lua_not_media_as_argument(self):
-        media=self.root/'한글; & name.wav'
-        def launch(args,**kwargs):
-            self.assertEqual(args[:2],[str(self.exe),'-nonewinst'])
-            script=Path(args[2])
-            self.assertEqual(script.suffix,'.lua')
-            self.assertNotIn(str(media),args)
-            self.assertIn(str(media),script.read_text())
-            script.with_suffix('.json').write_text(json.dumps({'ok':True,'project_name':'A','track_name':'voice'}))
-        with patch.object(reaper_bridge.subprocess,'Popen',side_effect=launch):
-            result=reaper_bridge.run_target_request(self.root,self.exe,'insert',self.destination,media,'test')
-            self.assertTrue(result['ok'])
-        self.assertEqual(list((self.root/'.desktop/reaper_requests').glob('*')),[])
+    def test_ipc_capture_payload_and_ack_never_launch(self):
+        folder=self.heartbeat()
+        def receiver(_):
+            request=next(folder.glob('*.req'))
+            data={k:bytes.fromhex(v).decode() for k,v in (line.split('=',1) for line in request.read_text().splitlines())}
+            self.assertEqual(data['action'],'capture')
+            request.with_suffix('.json').write_text(json.dumps({'ok':True,'target':self.destination}))
+        with patch('time.sleep',side_effect=receiver),patch('subprocess.Popen',side_effect=AssertionError('No app launch')):
+            result=bridge.run_target_request(self.root,None,'capture')
+        self.assertTrue(result['ok'])
+        self.assertEqual(list(folder.glob('*.req')),[])
 
-    def test_target_capture_and_failure_preserve_last_selection(self):
-        replacement={**self.destination,'track_guid':'t2','track_name':'2 · other'}
-        with patch.object(reaper_bridge,'find_reaper',return_value=self.exe),patch.object(reaper_bridge,'run_target_request',return_value={'ok':True,'target':replacement}):
+    def test_target_capture_failure_preserves_previous_selection(self):
+        replacement={**self.destination,'track_guid':'t2'}
+        with patch.object(bridge,'run_target_request',return_value={'ok':True,'target':replacement}):
             self.assertTrue(self.api.set_reaper_target()['ok'])
-        self.assertEqual(reaper_bridge.read_target(self.root),replacement)
-        with patch.object(reaper_bridge,'find_reaper',return_value=self.exe),patch.object(reaper_bridge,'run_target_request',return_value={'error':'No track selected'}):
+        with patch.object(bridge,'run_target_request',return_value={'error':'No track'}):
             self.assertIn('error',self.api.set_reaper_target())
-        self.assertEqual(reaper_bridge.read_target(self.root),replacement)
+        self.assertEqual(bridge.read_target(self.root),replacement)
         self.assertFalse(self.api._export_lock.locked())
 
-    def test_no_target_does_not_extract_or_launch(self):
-        reaper_bridge.target_path(self.root).unlink()
-        with patch('desktop_app.render_range') as render,patch.object(reaper_bridge,'run_target_request') as request:
-            self.assertTrue(self.api.send_to_reaper(self.aid,0,1,'x')['needs_target'])
-            render.assert_not_called();request.assert_not_called()
+    def test_offline_or_stale_receiver_requests_setup_without_launch(self):
+        self.heartbeat(age=20)
+        with patch('subprocess.Popen',side_effect=AssertionError('No app launch')):
+            result=self.api.set_reaper_target()
+        self.assertTrue(result['needs_receiver'])
+        self.assertTrue(Path(result['script_path']).is_file())
+        self.assertEqual(bridge.live_receivers(self.root),[])
 
-    def test_no_acknowledgement_does_not_report_success(self):
-        with patch.object(reaper_bridge.subprocess,'Popen'),patch('time.monotonic',side_effect=[0,16]):
-            result=reaper_bridge.run_target_request(self.root,self.exe,'capture')
+    def test_multiple_instances_require_explicit_capture_selection(self):
+        self.heartbeat();self.heartbeat('instance-2','project-2')
+        result=bridge.run_target_request(self.root,None,'capture')
         self.assertIn('error',result)
-        self.assertEqual(reaper_bridge.read_target(self.root),self.destination)
+        self.assertEqual(len(result['receivers']),2)
+        self.assertEqual(list(bridge.ipc_root(self.root).glob('*/*.req')),[])
 
-    def test_cancel_does_not_extract(self):
-        self.inventory();self.api._window.create_file_dialog=lambda *a,**k:None
-        with patch.object(reaper_bridge,'find_reaper',return_value=None),patch('desktop_app.render_range') as render:
-            self.assertTrue(self.api.send_to_reaper(self.aid,0,.5,'clip')['cancelled'])
+    def test_pinned_instance_validates_live_project_without_switching(self):
+        pinned=self.heartbeat(project='other-project');other=self.heartbeat('instance-2','project-1')
+        def receiver(_):
+            request=next(pinned.glob('*.req'))
+            request.with_suffix('.json').write_text(json.dumps({'error':'Project is closed'}))
+        with patch('time.sleep',side_effect=receiver):
+            result=bridge.run_target_request(self.root,None,'insert',self.destination)
+        self.assertIn('error',result)
+        self.assertEqual(list(other.glob('*.req')),[])
+
+    def test_no_ack_is_not_success_and_pending_request_is_removed(self):
+        folder=self.heartbeat()
+        with patch('time.monotonic',side_effect=[0,16]):
+            result=bridge.run_target_request(self.root,None,'capture')
+        self.assertIn('error',result)
+        self.assertEqual(list(folder.glob('*.req')),[])
+
+    def test_legacy_pointer_target_requires_recapture(self):
+        bridge.target_path(self.root).write_text(json.dumps(dict(session='old',project_pointer='address',track_guid='t1')))
+        with patch('desktop_app.render_range') as render:
+            self.assertTrue(self.api.send_to_reaper(self.aid,0,1,'x')['needs_target'])
             render.assert_not_called()
-        self.assertFalse(self.api._export_lock.locked())
 
-    def test_rejected_if_export_is_busy_or_not_trusted(self):
+    def test_untrusted_or_busy_actions_do_not_mutate(self):
         self.api._export_lock.acquire()
-        self.assertIn('error',self.api.send_to_reaper(self.aid,0,1,'x'))
-        self.api._export_lock.release()
-        with patch.object(self.api,'_trusted',return_value=False),patch('desktop_app.source_info') as source:
+        self.assertIn('error',self.api.set_reaper_target());self.api._export_lock.release()
+        with patch.object(self.api,'_trusted',return_value=False):
+            self.assertIn('error',self.api.prepare_reaper_connection())
+            self.assertIn('error',self.api.open_reaper_connection_folder())
             self.assertIn('error',self.api.send_to_reaper(self.aid,0,1,'x'))
-            source.assert_not_called()
 
-    def test_launch_failure_preserves_export_and_releases_lock(self):
-        self.inventory()
-        with patch.object(reaper_bridge,'find_reaper',return_value=self.exe),patch.object(reaper_bridge,'run_target_request',side_effect=OSError('test launch failure')):
-            self.assertIn('error',self.api.send_to_reaper(self.aid,0,.5,'x'))
-        self.assertEqual(len(list((self.root/'reaper_media').glob('*.wav'))),1)
-        self.assertEqual(list((self.root/'reaper_media').glob('*.partial.wav')),[])
-        self.assertFalse(self.api._export_lock.locked())
+    def test_prepared_script_location_survives_version_changes(self):
+        first=bridge.prepare_receiver(self.root)
+        self.assertEqual(first.parent,self.root/'reaper_connection')
+        self.assertEqual(bridge.prepare_receiver(self.root),first)
+        self.assertNotIn('/versions/',str(first))
+        self.assertIn('local ROOT=',first.read_text())
 
 if __name__=='__main__':unittest.main()

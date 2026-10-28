@@ -1528,47 +1528,98 @@ document.getElementById('codaOnly').addEventListener('change', () => {
   doSearch(false).catch(e => alert(e.message));
 });
 
-// Target is pinned independently from the active REAPER tab/selected track.
+// Exchange requests with a receiver running INSIDE REAPER. Never launch it.
 (() => {
   const button = document.getElementById('btnSendReaper');
   const choose = document.getElementById('btnSetReaperTarget');
+  const help = document.getElementById('btnReaperConnection');
+  const instance = document.getElementById('reaperInstance');
   const label = document.getElementById('reaperTargetLabel');
   const status = document.getElementById('reaperSendStatus');
-  function showTarget(target) {
-    label.textContent = target ? `${target.project_name} / ${target.track_name}` : '전송 대상 미지정';
+  for (const control of document.querySelectorAll('.editor-actions button')) { control.style.flexShrink='0'; control.style.whiteSpace='nowrap'; }
+  let busy=false;
+  function render(info) {
+    const target=info.target;
+    label.textContent=target ? `${target.project_name} / ${target.track_name}` : '전송 대상 미지정';
+    const receivers=info.receivers || [];
+    const previous=instance.value;
+    instance.replaceChildren();
+    if (receivers.length>1) instance.add(new Option('받을 REAPER 창 선택',''));
+    for (const item of receivers) instance.add(new Option(item.active_project+' · '+item.session.slice(0,6),item.session));
+    if (receivers.some(r=>r.session===previous)) instance.value=previous;
+    else if (target && receivers.some(r=>r.session===target.instance)) instance.value=target.instance;
+    instance.hidden=receivers.length<2;
+  }
+  async function refresh() {
+    const info=await window.pywebview.api.reaper_target_info();
+    if (info.error) throw new Error(info.error);
+    render(info);return info;
+  }
+  async function guide() {
+    const info=await window.pywebview.api.prepare_reaper_connection();
+    if (info.error) {status.textContent=info.error;return;}
+    const dialog=document.createElement('dialog');
+    dialog.style.cssText='width:min(650px,90vw);background:#20232b;color:#eee;border:1px solid #687080;border-radius:12px;padding:24px';
+    dialog.innerHTML=`<h2>REAPER 연결</h2>
+      <p>실행 중인 REAPER 안에서 수신 스크립트를 실행합니다. 앱은 새 REAPER 창을 열지 않습니다.</p>
+      <ol><li>REAPER의 <b>Actions → Show action list</b>를 여세요.</li>
+      <li><b>New action → Load ReaScript</b>에서 아래 Lua 파일을 선택하세요.</li>
+      <li>추가된 <b>Source Extractor - Connect</b> 액션을 선택하고 <b>Run</b>을 누르세요.</li></ol>
+      <input class="scriptPath" readonly style="width:100%;box-sizing:border-box" aria-label="연결 스크립트 파일 경로">
+      <p><button class="copy">경로 복사</button> <button class="folder">스크립트 폴더 열기</button></p>
+      <p>REAPER를 다시 실행하면 등록된 액션을 다시 실행하세요. 단축키를 지정해도 됩니다. 별도 확장 플러그인은 필요 없습니다.</p>
+      <p>이후 받을 프로젝트·트랙을 선택하고 앱의 ‘전송 대상 지정/변경’을 누르세요. 저장 전후에도 같은 프로젝트를 기억합니다.</p>
+      <p class="message" role="status"></p><button class="done">연결 확인 후 닫기</button>`;
+    const input=dialog.querySelector('.scriptPath'); input.value=info.script_path;
+    dialog.querySelector('.copy').onclick=async()=>{
+      input.select();
+      try {await navigator.clipboard.writeText(input.value);dialog.querySelector('.message').textContent='경로를 복사했어요.';}
+      catch(e){dialog.querySelector('.message').textContent='선택된 경로를 Ctrl+C로 복사하세요.';}
+    };
+    dialog.querySelector('.folder').onclick=async()=>{
+      const result=await window.pywebview.api.open_reaper_connection_folder();
+      if(result.error)dialog.querySelector('.message').textContent=result.error;
+    };
+    dialog.querySelector('.done').onclick=async()=>{
+      try {const info=await refresh();status.textContent=info.receivers.length ? 'REAPER 연결 확인됨. 전송 대상을 지정하세요.' : '수신 스크립트가 아직 실행 중이 아닙니다.';}
+      catch(e){status.textContent=String(e);}
+      dialog.close();
+    };
+    dialog.addEventListener('keydown',e=>e.stopPropagation());
+    dialog.addEventListener('close',()=>dialog.remove(),{once:true});
+    document.body.appendChild(dialog);dialog.showModal();
   }
   async function connect() {
-    const available = !!window.pywebview?.api?.send_to_reaper;
-    button.hidden = choose.hidden = label.hidden = !available;
-    choose.title = 'REAPER에서 받을 프로젝트와 트랙을 선택한 뒤 누르세요. 현재 선택을 기억합니다.';
-    button.title = '지정한 프로젝트·트랙의 편집 커서에 삽입합니다. 삽입 후 커서는 아이템 끝으로 이동합니다.';
-    if (available) {
-      try { showTarget((await window.pywebview.api.reaper_target_info()).target); }
-      catch (e) { status.textContent = String(e); }
-    }
+    const available=!!window.pywebview?.api?.send_to_reaper;
+    button.hidden=choose.hidden=help.hidden=label.hidden=!available;
+    choose.title='REAPER에서 받을 프로젝트와 트랙을 선택한 뒤 누르세요.';
+    if(available) {try{await refresh();}catch(e){status.textContent=String(e);}}
   }
-  window.addEventListener('pywebviewready', connect);
-  connect();
-  choose.addEventListener('click', async () => {
-    choose.disabled = button.disabled = true;
-    status.textContent = 'REAPER 전송 대상 확인 중…';
+  help.addEventListener('click',()=>guide().catch(e=>status.textContent=String(e)));
+  window.addEventListener('pywebviewready',connect);connect();
+  choose.addEventListener('click',async()=>{
+    if(busy)return;busy=true;choose.disabled=button.disabled=true;
+    status.textContent='REAPER 전송 대상 확인 중…';
     try {
-      const result = await window.pywebview.api.set_reaper_target();
-      if (result.target) showTarget(result.target);
-      status.textContent = result.error || (result.cancelled ? '대상 지정 취소' : '전송 대상을 기억했어요.');
-    } catch (e) { status.textContent = '대상 지정 실패: '+e; }
-    finally { choose.disabled = button.disabled = false; }
+      await refresh();
+      const result=await window.pywebview.api.set_reaper_target(instance.value||null);
+      status.textContent=result.error||(result.ok?'전송 대상을 기억했어요.':'대상 지정 취소');
+      if(result.needs_receiver)await guide();
+      if(result.ok||result.receivers)await refresh();
+    }catch(e){status.textContent='대상 지정 실패: '+e;}
+    finally{busy=false;choose.disabled=button.disabled=false;}
   });
-  button.addEventListener('click', async () => {
-    if (!editorAudioId || editorDuration <= 0) return alert('파형을 먼저 불러오세요.');
-    if (selectionEnd-selectionStart < .01) return alert('전송할 구간을 드래그해서 선택하세요.');
-    choose.disabled = button.disabled = true;
-    status.textContent = 'REAPER 전송 준비 중…';
+  button.addEventListener('click',async()=>{
+    if(busy)return;
+    if(!editorAudioId||editorDuration<=0)return alert('파형을 먼저 불러오세요.');
+    if(selectionEnd-selectionStart<.01)return alert('전송할 구간을 드래그해서 선택하세요.');
+    busy=true;choose.disabled=button.disabled=true;status.textContent='REAPER 전송 중…';
     try {
-      const result = await window.pywebview.api.send_to_reaper(editorAudioId, selectionStart, selectionEnd, manualTranscript.value || '선택 구간');
-      status.textContent = result.error || (result.cancelled ? '전송 취소' : result.message);
-      status.title = result.path || '';
-    } catch (e) { status.textContent = 'REAPER 전송 실패: '+e; }
-    finally { choose.disabled = button.disabled = false; }
+      const result=await window.pywebview.api.send_to_reaper(editorAudioId,selectionStart,selectionEnd,manualTranscript.value||'선택 구간');
+      status.textContent=result.error||result.message||'전송 취소';status.title=result.path||'';
+      if(result.needs_receiver)await guide();
+      if(result.ok)await refresh();
+    }catch(e){status.textContent='REAPER 전송 실패: '+e;}
+    finally{busy=false;choose.disabled=button.disabled=false;}
   });
 })();
