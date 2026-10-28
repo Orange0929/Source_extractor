@@ -198,13 +198,15 @@
           <label class="notranslate">길이<input id="rangeDuration" type="text" value="1.000초" readonly /></label>
         </div>
 
-        <div class="row editor-actions">
+        <div class="row editor-actions" style="flex-wrap:wrap;gap:8px">
           <button id="btnPlaySelection" class="ghost notranslate" type="button">선택 구간 재생</button>
           <button id="btnDownloadRange" class="notranslate" type="button">선택 구간 저장</button>
           <button id="btnSendReaper" class="ghost notranslate" type="button" hidden>REAPER로 보내기</button>
           <button id="btnSetReaperTarget" class="ghost notranslate" type="button" hidden>전송 대상 지정/변경</button>
-          <span id="reaperTargetLabel" style="font-size:12px" hidden></span>
-          <span id="reaperSendStatus" role="status" aria-live="polite" style="font-size:12px"></span>
+          <button id="btnReaperConnection" class="ghost notranslate" type="button" hidden>REAPER 연결 안내</button>
+          <select id="reaperInstance" aria-label="받을 REAPER 창" hidden></select>
+          <span id="reaperTargetLabel" style="font-size:12px;flex-basis:100%;white-space:normal" hidden></span>
+          <span id="reaperSendStatus" role="status" aria-live="polite" style="font-size:12px;flex-basis:100%;white-space:normal"></span>
           <label class="check-label notranslate"><input id="loopSelection" type="checkbox" checked /> 반복</label>
         </div>
 
