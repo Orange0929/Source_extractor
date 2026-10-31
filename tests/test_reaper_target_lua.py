@@ -109,6 +109,21 @@ class ReceiverTests(unittest.TestCase):
         self.assertNotEqual(replacement['project_id'],target['project_id'])
         self.assertTrue(self.request('insert',replacement)['ok'])
 
+    def test_automatic_bootstrap_requires_matching_live_token(self):
+        import reaper_windows
+        window=dict(key='100:20:9000',hwnd=100,pid=20,created=9000,title='REAPER')
+        def deliver(key,script):
+            self.assertEqual(key,window['key'])
+            self.lua.execute(script.read_text())
+        with patch.object(reaper_windows,'enumerate_reaper_windows',return_value=[window]),patch.object(reaper_windows,'deliver_script',side_effect=deliver) as delivery,patch('subprocess.Popen',side_effect=AssertionError('Never launch REAPER')):
+            connected=bridge.connect_automatically(self.root)
+            self.assertTrue(connected['ok'],connected)
+            target=self.request('capture')['target']
+            self.assertEqual(target['instance'],connected['instance'])
+            self.assertTrue(self.request('insert',target)['ok'])
+            self.assertEqual(bridge.connect_automatically(self.root)['instance'],connected['instance'])
+            self.assertEqual(delivery.call_count,1)
+
     def test_windows_crlf_request_format(self):
         target=self.request('capture')['target']
         folder=bridge.ipc_root(self.root)/target['instance']

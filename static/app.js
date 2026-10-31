@@ -1528,12 +1528,14 @@ document.getElementById('codaOnly').addEventListener('change', () => {
   doSearch(false).catch(e => alert(e.message));
 });
 
-// Exchange requests with a receiver running INSIDE REAPER. Never launch it.
+// Auto attach is the default; manual receiver remains available.
 (() => {
   const button = document.getElementById('btnSendReaper');
   const choose = document.getElementById('btnSetReaperTarget');
   const help = document.getElementById('btnReaperConnection');
   const instance = document.getElementById('reaperInstance');
+  const mode = document.getElementById('reaperConnectionMode');
+  mode.value = localStorage.getItem('reaperConnectionMode') === 'manual' ? 'manual' : 'auto';
   const label = document.getElementById('reaperTargetLabel');
   const status = document.getElementById('reaperSendStatus');
   for (const control of document.querySelectorAll('.editor-actions button')) { control.style.flexShrink='0'; control.style.whiteSpace='nowrap'; }
@@ -1541,14 +1543,16 @@ document.getElementById('codaOnly').addEventListener('change', () => {
   function render(info) {
     const target=info.target;
     label.textContent=target ? `${target.project_name} / ${target.track_name}` : '전송 대상 미지정';
-    const receivers=info.receivers || [];
+    const entries=mode.value==='auto' ? (info.windows||[]).map(w=>({id:w.key,text:w.title})) : (info.receivers||[]).map(r=>({id:r.session,text:r.active_project+' · '+r.session.slice(0,6)}));
     const previous=instance.value;
     instance.replaceChildren();
-    if (receivers.length>1) instance.add(new Option('받을 REAPER 창 선택',''));
-    for (const item of receivers) instance.add(new Option(item.active_project+' · '+item.session.slice(0,6),item.session));
-    if (receivers.some(r=>r.session===previous)) instance.value=previous;
-    else if (target && receivers.some(r=>r.session===target.instance)) instance.value=target.instance;
-    instance.hidden=receivers.length<2;
+    if(entries.length>1)instance.add(new Option('받을 REAPER 창 선택',''));
+    for(const entry of entries)instance.add(new Option(entry.text,entry.id));
+    if(entries.some(e=>e.id===previous))instance.value=previous;
+    else if(mode.value==='manual' && target && entries.some(e=>e.id===target.instance))instance.value=target.instance;
+    instance.hidden=entries.length<2;
+    choose.textContent=mode.value==='auto' ? 'REAPER 연결 / 대상 변경' : '전송 대상 지정/변경';
+    help.textContent='보조 스크립트 연결 안내';
   }
   async function refresh() {
     const info=await window.pywebview.api.reaper_target_info();
@@ -1560,7 +1564,7 @@ document.getElementById('codaOnly').addEventListener('change', () => {
     if (info.error) {status.textContent=info.error;return;}
     const dialog=document.createElement('dialog');
     dialog.style.cssText='width:min(650px,90vw);background:#20232b;color:#eee;border:1px solid #687080;border-radius:12px;padding:24px';
-    dialog.innerHTML=`<h2>REAPER 연결</h2>
+    dialog.innerHTML=`<h2>보조 스크립트 연결</h2><p>기본 자동 연결이 안 되거나 수동 연결을 선호할 때 사용하는 두 번째 방법입니다. 앱에서 스크립트 연결(보조)을 선택하세요.</p>
       <p>실행 중인 REAPER 안에서 수신 스크립트를 실행합니다. 앱은 새 REAPER 창을 열지 않습니다.</p>
       <ol><li>REAPER의 <b>Actions → Show action list</b>를 여세요.</li>
       <li><b>New action → Load ReaScript</b>에서 아래 Lua 파일을 선택하세요.</li>
@@ -1591,10 +1595,11 @@ document.getElementById('codaOnly').addEventListener('change', () => {
   }
   async function connect() {
     const available=!!window.pywebview?.api?.send_to_reaper;
-    button.hidden=choose.hidden=help.hidden=label.hidden=!available;
+    button.hidden=choose.hidden=help.hidden=label.hidden=mode.hidden=!available;
     choose.title='REAPER에서 받을 프로젝트와 트랙을 선택한 뒤 누르세요.';
     if(available) {try{await refresh();}catch(e){status.textContent=String(e);}}
   }
+  mode.addEventListener('change',()=>{localStorage.setItem('reaperConnectionMode',mode.value);refresh().catch(e=>status.textContent=String(e));});
   help.addEventListener('click',()=>guide().catch(e=>status.textContent=String(e)));
   window.addEventListener('pywebviewready',connect);connect();
   choose.addEventListener('click',async()=>{
@@ -1602,9 +1607,9 @@ document.getElementById('codaOnly').addEventListener('change', () => {
     status.textContent='REAPER 전송 대상 확인 중…';
     try {
       await refresh();
-      const result=await window.pywebview.api.set_reaper_target(instance.value||null);
+      const result=mode.value==='auto' ? await window.pywebview.api.connect_reaper(instance.value||null) : await window.pywebview.api.set_reaper_target(instance.value||null);
       status.textContent=result.error||(result.ok?'전송 대상을 기억했어요.':'대상 지정 취소');
-      if(result.needs_receiver)await guide();
+      if(result.needs_receiver && mode.value==='manual')await guide();
       if(result.ok||result.receivers)await refresh();
     }catch(e){status.textContent='대상 지정 실패: '+e;}
     finally{busy=false;choose.disabled=button.disabled=false;}
@@ -1617,7 +1622,8 @@ document.getElementById('codaOnly').addEventListener('change', () => {
     try {
       const result=await window.pywebview.api.send_to_reaper(editorAudioId,selectionStart,selectionEnd,manualTranscript.value||'선택 구간');
       status.textContent=result.error||result.message||'전송 취소';status.title=result.path||'';
-      if(result.needs_receiver)await guide();
+      if(result.needs_receiver && mode.value==='manual')await guide();
+      if(result.needs_receiver && mode.value==='auto')status.textContent='REAPER 연결 버튼을 눌러 다시 연결하세요.';
       if(result.ok)await refresh();
     }catch(e){status.textContent='REAPER 전송 실패: '+e;}
     finally{busy=false;choose.disabled=button.disabled=false;}
