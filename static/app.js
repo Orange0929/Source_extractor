@@ -278,7 +278,9 @@ async function refreshProfiles() {
   }
 }
 
-async function refreshAudios(preferredAudioId = "") {
+let audioListRequest = 0;
+async function refreshAudios(preferredAudioId = "", editorToken = null) {
+  const request = ++audioListRequest;
   const pid = currentProfileId();
   sourceAudioSelect.innerHTML = "";
   profileAudios = [];
@@ -295,6 +297,8 @@ async function refreshAudios(preferredAudioId = "") {
   const url = new URL("/api/audios", window.location.origin);
   url.searchParams.set("profile_id", pid);
   const data = await apiGet(url.toString());
+  if (request !== audioListRequest || pid !== currentProfileId() ||
+      (editorToken !== null && editorToken !== editorLoadToken)) return;
   profileAudios = data.audios || [];
   document.getElementById("audioCounts").textContent = `현재 프로필 원본 ${profileAudios.length}개 · 검색 결과는 파일 수가 아닌 대사 구간 수입니다.`;
 
@@ -697,6 +701,10 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
   editorDuration = 0;
   editorViewStart = 0;
   editorViewEnd = 0;
+  selectionStart = selectionEnd = 0;
+  rangeStart.value = rangeEnd.value = rangeDuration.value = "";
+  manualTranscript.value = "";
+  wavePlayhead.style.display = "none";
   sourceAudioPlayer.pause();
   waveformViewport.style.display = "none";
   waveformStatus.textContent = "정규화 시간축과 파형을 준비하는 중...";
@@ -730,6 +738,7 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
     if (token !== editorLoadToken) return;
     audioPlot.data = waveData;
   } catch (e) {
+    if (token !== editorLoadToken || e.name === "AbortError") throw new Error("cancelled");
     if (e.message !== "cancelled") waveformStatus.textContent = e.message;
     throw e;
   } finally {
@@ -740,6 +749,7 @@ async function loadWaveform(audioId, preferredStart = null, preferredEnd = null,
   waveformViewport.style.display = "block";
   // Wait for display:block to have a real width before the first wheel gesture.
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  if (token !== editorLoadToken) return;
   audioPlot.activate();
   const selectedLength = Math.max(0, Number(preferredEnd) - Number(preferredStart));
   const visibleLength = editorViewEnd - editorViewStart;
@@ -771,9 +781,10 @@ async function openClipInEditor(clip, row) {
     end: Number(clip.end_s),
     transcript: clip.transcript || ""
   };
-  await refreshAudios(clip.audio_id);
-  sourceAudioSelect.value = clip.audio_id;
-  await loadWaveform(clip.audio_id, clip.start_s, clip.end_s, clip.transcript || "");
+  // Invalidate the old editor synchronously, before any list/network wait.
+  const waveform = loadWaveform(clip.audio_id, clip.start_s, clip.end_s, clip.transcript || "");
+  const token = editorLoadToken;
+  await Promise.all([waveform, refreshAudios(clip.audio_id, token)]);
 }
 
 function pointerTime(ev) {
