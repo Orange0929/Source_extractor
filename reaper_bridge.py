@@ -68,6 +68,39 @@ def live_receivers(root):
     return list(result.values())
 
 
+def connect_automatically(root,window_key=None):
+    import time
+    import uuid
+    from reaper_windows import enumerate_reaper_windows,deliver_script
+    windows=enumerate_reaper_windows()
+    matches=[w for w in windows if not window_key or w['key']==window_key]
+    if len(matches)!=1:
+        if len(matches)>1:return {'error':'REAPER 창이 여러 개 열려 있습니다. 받을 창을 선택하세요.','windows':windows}
+        return {'error':'실행 중인 REAPER 창을 찾지 못했습니다. 받을 프로젝트를 REAPER에서 먼저 열어주세요.','windows':windows}
+    selected=matches[0]
+    existing=[r for r in live_receivers(root) if r.get('window_key')==selected['key']]
+    if len(existing)==1:return {'ok':True,'instance':existing[0]['session']}
+    receiver=prepare_receiver(root)
+    token=uuid.uuid4().hex
+    script=receiver.with_name('Auto-Connect-'+token+'.lua')
+    header='if os.time()>'+str(int(time.time())+10)+' then return end\n'
+    header+='local CONNECT_TOKEN='+lua_string(token)+'\nlocal WINDOW_KEY='+lua_string(selected['key'])+'\n'
+    script.write_text(header+receiver.read_text(encoding='utf-8'),encoding='utf-8')
+    try:
+        deliver_script(selected['key'],script)
+    except Exception as exc:
+        return {'error':str(exc),'needs_manual':True}
+    deadline=time.monotonic()+8
+    while time.monotonic()<deadline:
+        match=next((r for r in live_receivers(root) if r.get('connect_token')==token and r.get('window_key')==selected['key']),None)
+        if match:
+            try:script.unlink(missing_ok=True)
+            except OSError:pass
+            return {'ok':True,'instance':match['session']}
+        time.sleep(.05)
+    return {'error':'자동 연결의 실행 확인을 받지 못했습니다. REAPER 대화상자를 닫고 다시 시도하거나 보조 연결을 사용하세요.','needs_manual':True}
+
+
 def run_target_request(root, executable, action, target=None, media=None, name='', instance=None):
     # Deliberately no Popen: reconnecting or sending can never launch REAPER.
     import time

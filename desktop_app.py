@@ -168,10 +168,29 @@ class DesktopApi:
             return {'ok':True}
         return {'error':'연결 스크립트 경로를 복사해 REAPER에서 여세요.', 'script_path':str(script)}
 
+    def connect_reaper(self, window_key=None):
+        if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
+        if not self._export_lock.acquire(blocking=False):return {'error':'전송 중입니다. 완료 후 다시 시도하세요.'}
+        try:
+            from reaper_bridge import connect_automatically,run_target_request,target_path
+            result=connect_automatically(self._root,window_key)
+            if not result.get('ok'):return result
+            captured=run_target_request(self._root,None,'capture',instance=result['instance'])
+            if captured.get('ok'):
+                atomic_json(target_path(self._root),captured['target'])
+                activity_log.event(self._root,'reaper_auto_connected',target=captured['target'])
+            return captured
+        except Exception as exc:
+            return {'error':f'REAPER 자동 연결 실패: {exc}','needs_manual':True}
+        finally:self._export_lock.release()
+
     def reaper_target_info(self):
         if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}
         from reaper_bridge import read_target, live_receivers
-        return {'target':read_target(self._root),'receivers':live_receivers(self._root)}
+        from reaper_windows import enumerate_reaper_windows
+        try:windows=enumerate_reaper_windows()
+        except (OSError,RuntimeError):windows=[]
+        return {'target':read_target(self._root),'receivers':live_receivers(self._root),'windows':windows}
 
     def set_reaper_target(self, instance=None):
         if not self._trusted(): return {'error':'앱 화면에서만 사용할 수 있습니다.'}

@@ -53,6 +53,7 @@ local function snapshot()
   end
   local active=reaper.EnumProjects(-1)
   return {protocol=version, session=session, updated=os.time(), projects=projects,
+          connect_token=CONNECT_TOKEN or '', window_key=WINDOW_KEY or '',
           active_project=active and project_name(active) or '(프로젝트 없음)'}
 end
 local function perform(req)
