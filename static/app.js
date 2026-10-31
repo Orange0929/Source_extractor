@@ -610,6 +610,13 @@ function showEditorIndicator(time) {
 }
 const editorTransport = new EditorTransport(sourceAudioPlayer, showEditorIndicator,
   () => loopSelection.checked, message => { waveformStatus.textContent = message; });
+// Both visible players share one playback owner, including native controls.
+audioPlayer.addEventListener("play", () => {
+  if (!audioPlayer.paused) editorTransport.stop();
+});
+sourceAudioPlayer.addEventListener("play", () => {
+  if (!sourceAudioPlayer.paused) audioPlayer.pause();
+});
 function loadSelectionPreview() {
   if (!editorAudioId || selectionEnd-selectionStart < .01) return;
   editorTransport.prepare(editorAudioId, selectionStart, selectionEnd, "selection");
@@ -623,9 +630,16 @@ document.addEventListener("keydown", ev => {
   if (ev.code !== "Space" || ev.ctrlKey || ev.altKey || ev.metaKey) return;
   const target = ev.target;
   if (target.closest('input, textarea, select, audio, [contenteditable]:not([contenteditable="false"]), [role="slider"]')) return;
-  if (!clipEditor.isConnected || clipEditor.style.display === "none" || !audioPlot.data) return;
   // Buttons retain their keyboard behavior outside the focused editor.
   if (!clipEditor.classList.contains("is-expanded") && target.closest('button, a') && !clipEditor.contains(target)) return;
+  // Row previews start immediately, before the waveform finishes loading.
+  // Stop that player first instead of starting a second copy in the editor.
+  if (!audioPlayer.paused) {
+    ev.preventDefault();
+    if (!ev.repeat) audioPlayer.pause();
+    return;
+  }
+  if (!clipEditor.isConnected || clipEditor.style.display === "none" || !audioPlot.data) return;
   ev.preventDefault();
   if (!ev.repeat) toggleCursorPlayback();
 });
