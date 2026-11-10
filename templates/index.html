@@ -5,13 +5,15 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="google" content="notranslate" />
   <title>Voice Search MVP</title>
+  <link rel="stylesheet" href="/static/stt_settings.css?v={{ asset_version }}" />
   <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}" />
 </head>
 <body>
   <header class="wrap header" translate="no">
     <div>
       <h1 class="notranslate">Voice Search (Local)</h1>
-      <p class="sub notranslate">멀티 업로드 + 일괄 WAV 추출 + 파형 구간 편집 + 병렬 STT</p>
+      <button id="btnAppSettings" class="ghost" type="button" aria-haspopup="dialog">⚙ 설정</button>
+      <p class="sub notranslate">멀티 업로드 + 일괄 WAV 추출 + 파형 구간 편집</p>
     </div>
     <div id="desktopUpdates" class="desktop-updates" hidden>
       <span id="desktopVersion" class="hint"></span>
@@ -86,23 +88,15 @@
       </div>
 
       <!-- ✅ 여러 job 진행 표시 -->
-      <details id="sttControl" open>
-        <summary>Whisper 분석 관리</summary>
-        <div class="row">
-          <label>장치 <select id="sttDevice"><option value="auto">자동</option><option value="cuda">NVIDIA GPU</option><option value="cpu">CPU</option></select></label>
-          <label>성능 <select id="sttPerformance"><option value="eco">절전</option><option value="balanced">균형</option><option value="maximum">최대</option></select></label>
-          <label>CPU 스레드 (0=자동) <input id="sttThreads" type="number" min="0" value="0" style="width:70px"></label>
-          <button id="sttSave" type="button">설정 저장</button>
-        </div>
-        <p id="sttStatus" role="status">상태 확인 중…</p>
-        <div class="row"><button id="sttPause" type="button">일시정지</button><button id="sttResume" type="button">재개</button><button id="sttStop" type="button" class="danger">분석 중단</button></div>
-        <p class="hint">일시정지는 현재 파일 완료 후 적용됩니다. 중단한 파일은 처음부터 재분석합니다. GPU는 호환 CUDA/cuDNN 런타임이 필요하며, 자동 모드에서 사용할 수 없으면 CPU로 전환합니다. 성능 모드는 인식 품질 설정을 바꾸지 않습니다.</p>
-        <p id="sttNotice" role="status"></p>
-      </details>
+      <div id="sttControl" class="stt-transport" hidden>
+        <p id="sttStatus" class="hint" role="status"></p>
+        <div class="row"><button id="sttPause" type="button" class="ghost">일시정지</button><button id="sttResume" type="button" class="ghost">재개</button><button id="sttStop" type="button" class="danger">분석 중단</button></div>
+        <p id="sttNotice" class="hint" role="status"></p>
+      </div>
       <div id="jobsArea" class="jobsArea"></div>
 
       <p class="hint notranslate">
-        업로드는 파일별로 진행되지만, 업로드된 파일들의 STT는 <b>동시에(병렬)</b> 진행됩니다.<br/>
+        업로드된 파일은 <b>차례대로 분석</b>합니다. 장치와 성능은 상단 <b>설정</b>에서 변경하세요.<br/>
         각 작업은 <b>취소</b>할 수 있어요.
       </p>
     </section>
@@ -243,5 +237,19 @@
   <script src="/static/desktop_ui.js?v={{ asset_version }}"></script>
 <script src="/static/audio_manager.js?v={{ asset_version }}"></script>
   <script src="/static/stt_control.js?v={{ asset_version }}"></script>
+  <dialog id="appSettings" class="app-settings" aria-labelledby="appSettingsTitle">
+    <div class="settings-heading"><h2 id="appSettingsTitle">설정</h2><button id="sttSettingsClose" class="ghost" type="button" aria-label="설정 닫기">닫기</button></div>
+    <section aria-labelledby="sttSettingsTitle">
+      <h3 id="sttSettingsTitle">Whisper 음성 분석</h3>
+      <p class="hint">모든 프로필에 공통으로 적용됩니다.</p>
+      <label class="settings-field" for="sttDevice"><span>분석 장치</span><select id="sttDevice"><option value="auto">자동 (GPU 사용 불가 시 CPU)</option><option value="cuda">NVIDIA GPU</option><option value="cpu">CPU</option></select></label>
+      <label class="settings-field" for="sttPerformance"><span>성능 모드</span><select id="sttPerformance"><option value="eco">절전</option><option value="balanced">균형</option><option value="maximum">최대 성능</option></select></label>
+      <p class="hint">사용하는 CPU 스레드와 파일 사이 대기를 조절합니다. 인식 품질은 바꾸지 않으며 GPU 사용률을 일정 비율로 고정하지는 않습니다.</p>
+      <details class="settings-advanced"><summary>고급 설정</summary><label class="settings-field" for="sttThreads"><span>CPU 스레드 수</span><input id="sttThreads" type="number" min="0" value="0"></label><p class="hint">0은 성능 모드에 맞춰 자동으로 설정합니다.</p></details>
+      <p id="sttDeviceStatus" class="hint" role="status"></p>
+      <p class="hint">GPU 분석에는 호환 CUDA/cuDNN 런타임이 필요합니다. 설정은 현재 파일이 끝난 뒤 다음 분석부터 적용됩니다.</p>
+    </section>
+    <div class="settings-footer"><span id="sttSettingsNotice" role="status"></span><button id="sttSave" type="button">변경 사항 저장</button></div>
+  </dialog>
 </body>
 </html>
