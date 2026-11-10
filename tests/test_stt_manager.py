@@ -29,6 +29,12 @@ class Tests(unittest.TestCase):
   while not predicate():
    if time.monotonic()>deadline:self.fail('timeout')
    time.sleep(.01)
+ def test_legacy_idle_pause_does_not_block_new_upload(self):
+  self.manager.path.parent.mkdir(parents=True,exist_ok=True)
+  self.manager.path.write_text(json.dumps(dict(device='cpu',threads=1,paused=True)))
+  other=Manager(self.root);self.addCleanup(other.close)
+  self.assertFalse(other.paused)
+  self.assertEqual(other.submit(lambda:'uploaded').result(3),'uploaded')
  def test_pause_preserves_queue_and_resume(self):
   m=self.manager;m.pause();result=[]
   future=m.submit(lambda:result.append(1))
@@ -42,7 +48,7 @@ class Tests(unittest.TestCase):
  def test_settings_persist_and_validate(self):
   m=self.manager;m.configure({'device':'cpu','performance':'eco','threads':1});m.pause()
   other=Manager(self.root);self.addCleanup(other.close)
-  self.assertTrue(other.paused);self.assertEqual(other.settings['threads'],1)
+  self.assertFalse(other.paused);self.assertEqual(other.settings['threads'],1)
   with self.assertRaises(ValueError):m.configure({'device':'invalid'})
   with self.assertRaises(ValueError):m.configure({'threads':-1})
  def test_process_reused_and_progress_delivered(self):
@@ -145,6 +151,8 @@ class IntegrationTests(unittest.TestCase):
   c.app.handlers['/api/stt/control/{action}']('stop')
   self.assertEqual(self.data['audios'][0]['stt_status'],'cancelled')
   self.assertEqual(len(self.data['clips']),1)
+  self.assertFalse(c.STT_MANAGER.paused)
+  self.assertEqual(c.STT_MANAGER.submit(lambda:'new upload').result(3),'new upload')
  def test_commit_deduplicates_and_preserves_manual_edits(self):
   c=self.core
   c.STT_MANAGER.run=lambda *args:{'status':'done','message':'ok','clips':[dict(id='new',audio_id='a')]}

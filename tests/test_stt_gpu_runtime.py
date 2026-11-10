@@ -40,6 +40,29 @@ class RuntimeTests(unittest.TestCase):
   with patch.dict(os.environ,{'SOURCE_EXTRACTOR_GPU_RUNTIME':str(self.root),'PATH':'original'}):
    self.assertIn(str(folder),activate());self.assertTrue(os.environ['PATH'].startswith(str(folder)))
 
+ def test_install_releases_only_its_own_pause(self):
+  from stt_manager import Manager
+  manager=Manager(self.root);self.addCleanup(manager.close)
+  self.installer.manager=manager
+  manager.pause();self.installer.pause_hold=(False,manager.pause_revision)
+  with patch('stt_gpu_runtime.subprocess.Popen',side_effect=self.fake_process):self.installer._install()
+  self.assertFalse(manager.paused)
+ def test_explicit_pause_during_install_is_preserved(self):
+  from stt_manager import Manager
+  manager=Manager(self.root);self.addCleanup(manager.close)
+  self.installer.manager=manager
+  manager.pause();self.installer.pause_hold=(False,manager.pause_revision)
+  manager.pause()  # A separate user action after the install hold.
+  with patch('stt_gpu_runtime.subprocess.Popen',side_effect=self.fake_process):self.installer._install()
+  self.assertTrue(manager.paused)
+ def test_install_failure_also_releases_temporary_pause(self):
+  from stt_manager import Manager
+  manager=Manager(self.root);self.addCleanup(manager.close)
+  self.installer.manager=manager
+  manager.pause();self.installer.pause_hold=(False,manager.pause_revision)
+  with patch('stt_gpu_runtime.subprocess.Popen',side_effect=OSError('offline')):self.installer._install()
+  self.assertEqual(self.installer.status()['phase'],'error');self.assertFalse(manager.paused)
+
 class DownloadTests(unittest.TestCase):
  def test_combined_bytes_and_hash_verification(self):
   import io,json,hashlib

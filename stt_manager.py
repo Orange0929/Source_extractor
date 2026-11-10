@@ -24,6 +24,7 @@ class Manager:
         self.path = Path(root)/'.desktop'/'stt_settings.json'
         self.settings = {'device':'auto', 'performance':'balanced', 'threads':0, 'gpu_index':0}
         self.paused = False
+        self.pause_revision = 0
         try:
             saved = json.loads(self.path.read_text(encoding='utf-8'))
             if not isinstance(saved, dict): raise ValueError('invalid settings')
@@ -32,7 +33,8 @@ class Manager:
             if self.settings['performance'] not in ('eco','balanced','maximum'): self.settings['performance']='balanced'
             if type(self.settings['threads']) is not int or not 0 <= self.settings['threads'] <= (os.cpu_count() or 1): self.settings['threads']=0
             if type(self.settings['gpu_index']) is not int or self.settings['gpu_index']<0: self.settings['gpu_index']=0
-            self.paused = bool(saved.get('paused', False))
+            # Idle pause is session state, not a preference. Recovery below
+            # explicitly pauses only when unfinished files actually exist.
         except (OSError, ValueError, TypeError): pass
         self.cv = threading.Condition(threading.RLock())
         self.pending = []
@@ -45,7 +47,7 @@ class Manager:
         self.thread.start()
         atexit.register(self.close)
 
-    def _save(self): atomic(self.path, dict(self.settings, paused=self.paused))
+    def _save(self): atomic(self.path, self.settings)
 
     def configure(self, data):
         settings = dict(self.settings)
@@ -69,12 +71,12 @@ class Manager:
 
     def pause(self):
         with self.cv:
-            self.paused = True; self._save(); self.cv.notify_all()
+            self.paused = True; self.pause_revision += 1; self.cv.notify_all()
             if self.current is None: self.terminate()
 
     def resume(self):
         with self.cv:
-            self.paused = False; self._save(); self.cv.notify_all()
+            self.paused = False; self.pause_revision += 1; self.cv.notify_all()
 
     def submit(self, fn):
         future = Future()
@@ -247,7 +249,8 @@ def install(core):
             if installer.status()['busy']: raise core.HTTPException(409,'GPU 실행 구성 설치가 끝난 뒤 재개하세요.')
             manager.resume()
         elif action=='stop':
-            manager.pause()
+            installing = installer.status()['busy']
+            if not installing: manager.pause()
             cancelled = set()
             with core.JOBS_LOCK:
                 for job_id, job in core.JOBS.items():
@@ -265,6 +268,9 @@ def install(core):
                 for audio in data['audios']:
                     if audio['id'] in cancelled: audio.update(stt_status='cancelled',stt_message='중단됨(대기)')
                 core.save_data(data)
+            # Stop cancels this batch, not future uploads. Installation keeps
+            # its temporary hold until it finishes.
+            if not installing: manager.resume()
             # Running worker notices cancellation and kills the child itself.
         else: raise core.HTTPException(400,'잘못된 작업')
         core.audit('stt_control',command=action)
