@@ -40,6 +40,7 @@ class Installer:
         self.root=Path(root);self.target=self.root/'.desktop'/'gpu-runtime'
         self.manager=manager;self.inventory=inventory
         self.lock=threading.RLock();self.process=None;self.closed=False
+        self.pause_hold=None
         self.state={'busy':False,'phase':'idle','message':''}
         self.log=self.target.parent/'gpu_install.log'
         atexit.register(self.close)
@@ -54,7 +55,9 @@ class Installer:
             # Never replace DLLs while a model/file is using them.
             with self.manager.cv:
                 if self.manager.current is not None:raise ValueError('일시정지를 누르고 현재 파일이 끝난 뒤 설치하세요.')
+                was_paused=self.manager.paused
                 self.manager.pause()
+                self.pause_hold=(was_paused,self.manager.pause_revision)
             self.closed=False
             self.state={'busy':True,'phase':'preparing','downloaded_bytes':0,'total_bytes':0,'message':'NVIDIA 패키지 용량 확인 중…'}
             threading.Thread(target=self._install,daemon=True).start()
@@ -126,7 +129,7 @@ class Installer:
                     if backup.exists():backup.rename(self.target)
                     raise
                 with self.inventory.lock:self.inventory.cached=None;self.inventory.expires=0
-                outcome={'busy':False,'phase':'done','message':'GPU 실행 구성 설치 완료. 장치 확인 후 재개를 눌러주세요.'}
+                outcome={'busy':False,'phase':'done','message':'GPU 실행 구성 설치 완료. 장치를 다시 확인하세요.'}
         except Exception as exc:
             try:
                 with self.log.open('a',encoding='utf-8') as log:log.write('GPU setup failed: '+str(exc)+'\n')
@@ -141,7 +144,14 @@ class Installer:
                 self.process=None
             shutil.rmtree(stage,ignore_errors=True);shutil.rmtree(wheels,ignore_errors=True)
             if outcome['phase']=='done':shutil.rmtree(backup,ignore_errors=True)
-            with self.lock:self.state.update(outcome)
+            with self.lock:
+                self.state.update(outcome)
+                if self.pause_hold and not self.closed:
+                    was_paused,revision=self.pause_hold
+                    with self.manager.cv:
+                        # Do not undo an explicit Pause made during setup.
+                        if not was_paused and self.manager.pause_revision==revision:self.manager.resume()
+                self.pause_hold=None
 
     def close(self):
         with self.lock:

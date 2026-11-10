@@ -8,7 +8,7 @@ window.editClipTranscript = function (clip) {
       <label>대사<textarea rows="5" maxlength="20000" style="display:block;width:100%;box-sizing:border-box;margin:12px 0"></textarea></label>
       <details><summary>처음 저장된 대사</summary><p class="original" style="white-space:pre-wrap"></p><button type="button" class="restore">원문을 입력창에 복원</button></details>
       <p role="status" class="status" style="color:#ffbf87"></p>
-      <p>수정 후 현재 검색어와 일치하지 않으면 목록에서 사라질 수 있어요.</p>
+      <p>Enter: 저장 · Shift+Enter: 줄바꿈. 수정 후 현재 검색어와 일치하지 않으면 목록에서 사라질 수 있어요.</p>
       <div style="display:flex;justify-content:flex-end;gap:12px"><button type="button" class="cancel">취소</button><button type="button" class="save">저장</button></div>`;
     const input = dialog.querySelector('textarea');
     const save = dialog.querySelector('.save');
@@ -22,6 +22,12 @@ window.editClipTranscript = function (clip) {
     let busy = false;
     let saved = false;
     dialog.addEventListener('keydown', e => e.stopPropagation());
+    input.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+      if (e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+      e.preventDefault();
+      if (!e.repeat && !busy) save.click();
+    });
     dialog.addEventListener('cancel', e => { if (busy) e.preventDefault(); });
     dialog.addEventListener('close', () => { dialog.remove(); resolve(saved); }, {once:true});
     cancel.onclick = () => dialog.close();
