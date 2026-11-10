@@ -144,6 +144,7 @@ let profiles = [];
 
 // 검색 결과 캐시 + 선택 상태
 let lastResults = [];
+let searchRequest = 0;
 const selectedClipIds = new Set();
 const PAGE_SIZE = 100;
 let totalResults = 0;
@@ -442,6 +443,7 @@ function renderResults(items, append = false) {
   for (const c of newItems) {
     const row = document.createElement("div");
     row.className = "result";
+    row.dataset.clipId = c.id;
     row.style.display = "grid";
     row.style.gridTemplateColumns = "28px 1fr";
     row.style.columnGap = "10px";
@@ -513,7 +515,7 @@ function renderResults(items, append = false) {
       ev.stopPropagation();
       if (await window.editClipTranscript(c)) {
         resetPlayer();
-        try { await doSearch(false); } catch (e) { alert(e.message); }
+        try { await refreshResultsAfterEdit(c.id); } catch (e) { alert(e.message); }
       }
     });
     rightBox.appendChild(editBtn);
@@ -547,13 +549,46 @@ function renderResults(items, append = false) {
 }
 
 async function doSearch(append = false) {
+  const request = ++searchRequest;
   const offset = append ? lastResults.length : 0;
   const url = buildSearchUrl("/api/search", { limit: PAGE_SIZE, offset });
   const data = await apiGet(url.toString());
+  if (request !== searchRequest) return;
   totalResults = Number(data.total || 0);
   hasMoreResults = Boolean(data.has_more);
   renderResults(data.results || [], append);
   updateResultSummary();
+}
+
+// Refresh the already expanded result window after an edit, rather than
+// collapsing it to the first page. Re-query so search membership/ranking stays correct.
+async function refreshResultsAfterEdit(clipId) {
+  const request = ++searchRequest;
+  const count = Math.max(PAGE_SIZE, lastResults.length);
+  const query = buildSearchUrl("/api/search").toString();
+  const rows = Array.from(elResults.children).filter(row => row.dataset.clipId);
+  const edited = rows.findIndex(row => row.dataset.clipId === clipId);
+  const anchors = (edited < 0 ? rows : [rows[edited], ...rows.slice(edited+1), ...rows.slice(0,edited).reverse()])
+    .map(row => ({id:row.dataset.clipId, top:row.getBoundingClientRect().top}));
+  const scroll = {top:window.scrollY, left:window.scrollX};
+  const items = [];
+  let total = 0, more = false;
+  while (items.length < count) {
+    const url = new URL(query);
+    url.searchParams.set("limit", String(Math.min(500, count-items.length)));
+    url.searchParams.set("offset", String(items.length));
+    const data = await apiGet(url.toString());
+    if (request !== searchRequest || buildSearchUrl("/api/search").toString() !== query) return;
+    const page = data.results || [];
+    items.push(...page); total = Number(data.total || 0); more = Boolean(data.has_more);
+    if (!more || page.length === 0) break;
+  }
+  totalResults = total; hasMoreResults = more;
+  renderResults(items, false); updateResultSummary();
+  const current = new Map(Array.from(elResults.children).filter(row => row.dataset.clipId).map(row => [row.dataset.clipId,row]));
+  const anchor = anchors.find(item => current.has(item.id));
+  const top = anchor ? window.scrollY + current.get(anchor.id).getBoundingClientRect().top - anchor.top : scroll.top;
+  window.scrollTo({top:Math.max(0,top),left:scroll.left,behavior:"instant"});
 }
 
 // ===== Manual waveform range editor =====
