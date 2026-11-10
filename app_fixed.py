@@ -269,9 +269,12 @@ core.audio_timeline_cached_source = timeline_path_for_source
 core.run_stt_job = run_stt_job_fixed
 core.save_data = save_data_fixed
 
-try:
-    _cleanup_timeline_cache(core.load_data())
-except Exception:
-    pass
+if os.environ.get('SOURCE_EXTRACTOR_STT_CHILD') != '1':
+    try:
+        _cleanup_timeline_cache(core.load_data())
+    except Exception:
+        pass
+    from stt_manager import install
+    install(core)
 
 app = core.app

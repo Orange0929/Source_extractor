@@ -86,6 +86,19 @@
       </div>
 
       <!-- ✅ 여러 job 진행 표시 -->
+      <details id="sttControl" open>
+        <summary>Whisper 분석 관리</summary>
+        <div class="row">
+          <label>장치 <select id="sttDevice"><option value="auto">자동</option><option value="cuda">NVIDIA GPU</option><option value="cpu">CPU</option></select></label>
+          <label>성능 <select id="sttPerformance"><option value="eco">절전</option><option value="balanced">균형</option><option value="maximum">최대</option></select></label>
+          <label>CPU 스레드 (0=자동) <input id="sttThreads" type="number" min="0" value="0" style="width:70px"></label>
+          <button id="sttSave" type="button">설정 저장</button>
+        </div>
+        <p id="sttStatus" role="status">상태 확인 중…</p>
+        <div class="row"><button id="sttPause" type="button">일시정지</button><button id="sttResume" type="button">재개</button><button id="sttStop" type="button" class="danger">분석 중단</button></div>
+        <p class="hint">일시정지는 현재 파일 완료 후 적용됩니다. 중단한 파일은 처음부터 재분석합니다. GPU는 호환 CUDA/cuDNN 런타임이 필요하며, 자동 모드에서 사용할 수 없으면 CPU로 전환합니다. 성능 모드는 인식 품질 설정을 바꾸지 않습니다.</p>
+        <p id="sttNotice" role="status"></p>
+      </details>
       <div id="jobsArea" class="jobsArea"></div>
 
       <p class="hint notranslate">
@@ -229,5 +242,6 @@
   <script src="/static/transcript_editor.js?v={{ asset_version }}"></script>
   <script src="/static/desktop_ui.js?v={{ asset_version }}"></script>
 <script src="/static/audio_manager.js?v={{ asset_version }}"></script>
+  <script src="/static/stt_control.js?v={{ asset_version }}"></script>
 </body>
 </html>

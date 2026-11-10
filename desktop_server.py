@@ -71,7 +71,9 @@ def main():
         reasons = [f'{label}: {count}건 (최장 {int(max(time.monotonic()-x["started"] for x in active.values() if x["label"] == label))}초 경과)'
                    for label, count in counts.items()]
         with core.JOBS_LOCK:
-            reasons.extend(reason for job in core.JOBS.values() if (reason := job_reason(job)))
+            reasons.extend(reason for job in core.JOBS.values()
+                if not (job.get('status') == 'queued' and getattr(core, 'STT_MANAGER', None) and core.STT_MANAGER.paused)
+                if (reason := job_reason(job)))
         return reasons
 
     @app.get('/api/desktop/health')
