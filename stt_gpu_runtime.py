@@ -1,6 +1,9 @@
 """Optional Windows NVIDIA wheels isolated from the application's Python packages."""
 import atexit
 import json
+import hashlib
+import urllib.request
+from urllib.parse import urlparse
 import os
 from pathlib import Path
 import shutil
@@ -53,18 +56,56 @@ class Installer:
                 if self.manager.current is not None:raise ValueError('일시정지를 누르고 현재 파일이 끝난 뒤 설치하세요.')
                 self.manager.pause()
             self.closed=False
-            self.state={'busy':True,'phase':'installing','message':'NVIDIA GPU 실행 구성 다운로드·설치 중… 약 1.1GB, 몇 분 걸릴 수 있습니다.'}
+            self.state={'busy':True,'phase':'preparing','downloaded_bytes':0,'total_bytes':0,'message':'NVIDIA 패키지 용량 확인 중…'}
             threading.Thread(target=self._install,daemon=True).start()
             return dict(self.state)
 
+    def _update(self, **fields):
+        with self.lock:self.state.update(fields)
+
+    def _download_wheels(self, folder):
+        wheels=[]
+        for spec in PACKAGES:
+            if self.closed:raise RuntimeError('설치 중단됨')
+            name,version=spec.split('==')
+            with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json',timeout=30) as response:
+                metadata=json.load(response)
+            wheel=next((f for f in metadata['urls'] if f['filename'].endswith('-win_amd64.whl')),None)
+            if not wheel:raise RuntimeError('Windows 패키지를 찾지 못했습니다: '+spec)
+            if Path(wheel['filename']).name!=wheel['filename'] or urlparse(wheel['url']).scheme!='https':
+                raise RuntimeError('패키지 다운로드 경로가 올바르지 않습니다.')
+            wheels.append(wheel)
+        total=sum(w['size'] for w in wheels)
+        self._update(total_bytes=total,downloaded_bytes=0,phase='downloading',busy=True)
+        downloaded=0;paths=[]
+        for i,wheel in enumerate(wheels):
+            filename=wheel['filename'];path=folder/filename;part=path.with_suffix('.part')
+            self._update(message=f'다운로드 중 ({i+1}/{len(wheels)}): {filename}')
+            digest=hashlib.sha256();size=0
+            with urllib.request.urlopen(wheel['url'],timeout=30) as response, part.open('wb') as output:
+                while True:
+                    if self.closed:raise RuntimeError('설치 중단됨')
+                    chunk=response.read(512*1024)
+                    if not chunk:break
+                    output.write(chunk);digest.update(chunk);size+=len(chunk);downloaded+=len(chunk)
+                    self._update(downloaded_bytes=downloaded)
+            if size!=wheel['size'] or digest.hexdigest()!=wheel['digests']['sha256']:
+                raise RuntimeError('다운로드 검증 실패: '+filename)
+            part.rename(path);paths.append(str(path))
+        return paths
+
     def _install(self):
         stage=self.target.with_name('gpu-runtime-stage-'+uuid.uuid4().hex)
+        wheels=self.target.with_name('gpu-wheels-'+uuid.uuid4().hex)
         backup=self.target.with_name('gpu-runtime-backup-'+uuid.uuid4().hex)
         outcome={'busy':False,'phase':'error','message':'설치 중단됨'}
         try:
-            stage.mkdir(parents=True)
+            stage.mkdir(parents=True);wheels.mkdir(parents=True)
+            self._update(busy=True,phase='preparing',downloaded_bytes=0,total_bytes=0,message='NVIDIA 패키지 용량 확인 중…')
+            paths=self._download_wheels(wheels)
+            self._update(phase='installing',message='다운로드 완료 · 압축 해제 및 설치 중…')
             command=[sys.executable,'-m','pip','install','--isolated','--disable-pip-version-check',
-                     '--only-binary=:all:','--no-deps','--index-url','https://pypi.org/simple','--target',str(stage),*PACKAGES]
+                     '--no-deps','--no-index','--target',str(stage),*paths]
             with self.log.open('a',encoding='utf-8') as log:
                 log.write('\nGPU runtime installation: '+str(PACKAGES)+'\n');log.flush()
                 with self.lock:
@@ -73,6 +114,7 @@ class Installer:
                         creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
                     process=self.process
                 if process.wait(timeout=1800)!=0:raise RuntimeError('패키지 설치 실패. .desktop/gpu_install.log를 확인하세요.')
+            self._update(phase='checking',message='설치 파일 확인 및 적용 중…')
             for name in ('cublas64_12.dll','cudnn64_9.dll','cudart64_12.dll'):
                 if not any(stage.glob('nvidia/**/'+name)):raise RuntimeError('설치된 파일 누락: '+name)
             (stage/'manifest.json').write_text(json.dumps({'packages':PACKAGES}),encoding='utf-8')
@@ -86,6 +128,9 @@ class Installer:
                 with self.inventory.lock:self.inventory.cached=None;self.inventory.expires=0
                 outcome={'busy':False,'phase':'done','message':'GPU 실행 구성 설치 완료. 장치 확인 후 재개를 눌러주세요.'}
         except Exception as exc:
+            try:
+                with self.log.open('a',encoding='utf-8') as log:log.write('GPU setup failed: '+str(exc)+'\n')
+            except OSError:pass
             outcome={'busy':False,'phase':'error','message':str(exc)}
         finally:
             with self.lock:
@@ -94,9 +139,9 @@ class Installer:
                     try:self.process.wait(timeout=3)
                     except subprocess.TimeoutExpired:self.process.kill();self.process.wait()
                 self.process=None
-            shutil.rmtree(stage,ignore_errors=True)
+            shutil.rmtree(stage,ignore_errors=True);shutil.rmtree(wheels,ignore_errors=True)
             if outcome['phase']=='done':shutil.rmtree(backup,ignore_errors=True)
-            with self.lock:self.state=outcome
+            with self.lock:self.state.update(outcome)
 
     def close(self):
         with self.lock:
