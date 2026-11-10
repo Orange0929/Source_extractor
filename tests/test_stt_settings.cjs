@@ -4,7 +4,7 @@ const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/st
 const elements=new Map(),deferred=[];
 let state={settings:{device:'auto',performance:'balanced',threads:0},paused:false,running:false,waiting:0,actual:{message:'Ready'}};
 const context={Option:class{constructor(text,value){this.text=text;this.value=value;}},document:{getElementById:id=>elements.get(id)||null},setTimeout(){},confirm:()=>true,
- fetch:async(url,opts)=>{if(url==='/api/stt/hardware')return {ok:true,json:async()=>({cpu:{name:'Test CPU',logical_threads:16},gpus:[{index:0,name:'Test GPU',ready:true,reason:'ready'}]})};if(url==='/api/stt/settings')state.settings=JSON.parse(opts.body);return {ok:true,json:async()=>state};}};
+ fetch:async(url,opts)=>{if(url==='/api/stt/gpu-install')return {ok:true,json:async()=>({busy:false,phase:'idle',message:''})};if(url==='/api/stt/hardware')return {ok:true,json:async()=>({cpu:{name:'Test CPU',logical_threads:16},gpus:[{index:0,name:'Test GPU',ready:true,reason:'ready'}]})};if(url==='/api/stt/settings')state.settings=JSON.parse(opts.body);return {ok:true,json:async()=>state};}};
 vm.createContext(context);
 function run(){vm.runInContext(fs.readFileSync('static/stt_control.js','utf8'),context);}
 for(const match of fs.readFileSync('templates/index.html','utf8').matchAll(/<([a-z][\w-]*)\b([^>]*)>/gi)){

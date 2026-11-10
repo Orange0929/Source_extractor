@@ -6,6 +6,8 @@ import sys
 
 
 def main():
+    from stt_gpu_runtime import activate
+    activate()
     output = sys.stdout
     def send(value):
         output.write(json.dumps(value,ensure_ascii=False)+'\n');output.flush()

@@ -29,6 +29,8 @@ def cpu_info():
 
 
 def gpu_probe():
+    from stt_gpu_runtime import activate
+    activate()
     devices=[]
     smi=shutil.which('nvidia-smi')
     if not smi and os.name=='nt':

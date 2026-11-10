@@ -130,7 +130,7 @@ class Manager:
         if cancel.is_set(): return {'status':'cancelled', 'message':'중단됨', 'clips':[]}
         with self.cv:
             if self.process is None or self.process.poll() is not None:
-                env = dict(os.environ, SOURCE_EXTRACTOR_STT_CHILD='1', PYTHONIOENCODING='utf-8')
+                env = dict(os.environ, SOURCE_EXTRACTOR_STT_CHILD='1', PYTHONIOENCODING='utf-8', SOURCE_EXTRACTOR_GPU_RUNTIME=str(self.path.parent/'gpu-runtime'))
                 log = self.path.parent/'stt_worker.log'
                 log.parent.mkdir(parents=True,exist_ok=True)
                 with log.open('a',encoding='utf-8') as stderr:
@@ -211,6 +211,17 @@ def install(core):
 
     from stt_hardware import Inventory
     inventory = Inventory()
+    from stt_gpu_runtime import Installer
+    installer = Installer(core.DATA_DIR,manager,inventory)
+    core.STT_GPU_INSTALLER = installer
+
+    @core.app.get('/api/stt/gpu-install')
+    def gpu_install_status(): return installer.status()
+
+    @core.app.post('/api/stt/gpu-install')
+    def gpu_install():
+        try: return installer.start()
+        except ValueError as exc: raise core.HTTPException(409,str(exc))
 
     @core.app.get('/api/stt/hardware')
     def hardware(): return inventory.get()
@@ -232,7 +243,9 @@ def install(core):
     @core.app.post('/api/stt/control/{action}')
     def control(action: str):
         if action=='pause': manager.pause()
-        elif action=='resume': manager.resume()
+        elif action=='resume':
+            if installer.status()['busy']: raise core.HTTPException(409,'GPU 실행 구성 설치가 끝난 뒤 재개하세요.')
+            manager.resume()
         elif action=='stop':
             manager.pause()
             cancelled = set()
@@ -268,4 +281,4 @@ def install(core):
             core.audit('stt_recovered',count=len(unfinished))
 
     @core.app.on_event('shutdown')
-    def shutdown(): manager.close()
+    def shutdown(): installer.close(); manager.close()
