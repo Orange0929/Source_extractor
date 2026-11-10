@@ -93,6 +93,15 @@ class DesktopServerTest(unittest.TestCase):
                             if time.monotonic()>deadline:raise
                             time.sleep(.05)
                     self.assertFalse(health['busy'])
+                    with request('/api/stt/control') as response:
+                        self.assertEqual(json.load(response)['settings']['performance'],'balanced')
+                    def stt_post(path, data):
+                        req=urllib.request.Request(url+path,data=json.dumps(data).encode(),headers={'Content-Type':'application/json'})
+                        with urllib.request.urlopen(req,timeout=5) as response:return json.load(response)
+                    self.assertTrue(stt_post('/api/stt/control/pause',{})['paused'])
+                    self.assertEqual(stt_post('/api/stt/settings',{'device':'cpu','threads':1})['settings']['device'],'cpu')
+                    self.assertFalse(stt_post('/api/stt/control/resume',{})['paused'])
+                    self.assertTrue(stt_post('/api/stt/control/stop',{})['paused'])
                     with self.assertRaises(urllib.error.HTTPError) as error:request('/api/desktop/health',token=False)
                     self.assertEqual(error.exception.code,403)
                     with request('/') as response:
