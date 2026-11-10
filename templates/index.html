@@ -129,7 +129,20 @@
         <progress aria-label="프로필 불러오는 중"></progress>
         <span>프로필의 오디오와 대사를 불러오는 중…</span>
       </div>
+      <details id="advancedSearchOptions" style="margin:12px 0">
+        <summary id="advancedSearchSummary" class="hint" style="cursor:pointer">추가 검색 옵션</summary>
       <label class="hint"><input id="codaOnly" type="checkbox"> 받침만 찾기 (표기 기준 · 자모 1개, 예: ㄴ → 안)</label>
+      <fieldset id="languageExclusions" style="border:0;padding:0;margin:12px 0">
+        <legend class="hint">검색 결과에서 제외</legend>
+        <div class="row">
+          <label class="hint"><input type="checkbox" name="excludeLanguage" value="ko"> 한국어 제외</label>
+          <label class="hint"><input type="checkbox" name="excludeLanguage" value="ja"> 일본어 제외</label>
+          <label class="hint"><input type="checkbox" name="excludeLanguage" value="en"> 영어 제외</label>
+          <label class="hint"><input type="checkbox" name="excludeLanguage" value="other"> 기타 문자 제외</label>
+        </div>
+        <p class="hint">표기 문자 기준입니다. 섞인 대사는 해당 문자가 하나라도 있으면 제외합니다. 한자는 일본어에 포함합니다. 세 언어를 모두 제외하면 기타 문자로 적힌 대사를 찾아볼 수 있습니다.</p>
+      </fieldset>
+      </details>
       <p id="searchModeHelp" class="hint search-mode-help notranslate"></p>
       <div id="results" class="results"></div>
       <button id="btnLoadMore" class="load-more ghost notranslate" type="button" style="display:none;">더 보기</button>
