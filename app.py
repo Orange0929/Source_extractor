@@ -16,6 +16,7 @@ import math
 import hashlib
 import unicodedata
 from korean_pronunciation import pronounce
+from transcript_scripts import parse_exclusions, filter_clips
 from audio_analysis import read_audio, envelope, pitch
 from datetime import datetime
 from pathlib import Path
@@ -1070,7 +1071,7 @@ def api_delete_clip(clip_id: str):
 # =========================
 # Search API
 # =========================
-def search_clips(q: str, profile_id: Optional[str], mode: str, coda_only: bool = False) -> List[Dict[str, Any]]:
+def search_clips(q: str, profile_id: Optional[str], mode: str, coda_only: bool = False, exclude_languages: str = "") -> List[Dict[str, Any]]:
     data = load_data()
     mode = (mode or "basic").lower()
     if mode not in ("basic", "ko_sound", "jp_sound", "continuous"):
@@ -1079,6 +1080,13 @@ def search_clips(q: str, profile_id: Optional[str], mode: str, coda_only: bool =
     clips = data["clips"]
     if profile_id:
         clips = [c for c in clips if c.get("profile_id") == profile_id]
+
+    try:
+        excluded = parse_exclusions(exclude_languages)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if excluded:
+        clips = filter_clips(clips, excluded)
 
     if coda_only and q.strip():
         consonant = q.strip()
@@ -1173,8 +1181,9 @@ def api_search_ids(
     profile_id: Optional[str] = None,
     mode: str = "basic",
     coda_only: bool = False,
+    exclude_languages: str = "",
 ):
-    matches = search_clips(q, profile_id, mode, coda_only)
+    matches = search_clips(q, profile_id, mode, coda_only, exclude_languages)
     return {"ids": [c.get("id") for c in matches if c.get("id")], "total": len(matches)}
 
 
@@ -1186,10 +1195,11 @@ def api_search(
     offset: int = 0,
     mode: str = "basic",
     coda_only: bool = False,
+    exclude_languages: str = "",
 ):
     limit = min(500, max(1, int(limit)))
     offset = max(0, int(offset))
-    matches = search_clips(q, profile_id, mode, coda_only)
+    matches = search_clips(q, profile_id, mode, coda_only, exclude_languages)
     page = matches[offset:offset + limit]
     total = len(matches)
     return {

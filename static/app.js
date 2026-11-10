@@ -246,6 +246,8 @@ function buildSearchUrl(path, extra = {}) {
   url.searchParams.set("q", elSearchInput.value || "");
   url.searchParams.set("mode", elSearchMode.value || "basic");
   url.searchParams.set("coda_only", document.getElementById("codaOnly").checked ? "true" : "false");
+  const excluded = Array.from(document.querySelectorAll('input[name="excludeLanguage"]:checked'), el => el.value);
+  if (excluded.length) url.searchParams.set("exclude_languages", excluded.join(","));
   const pid = currentProfileId();
   if (pid) url.searchParams.set("profile_id", pid);
   for (const [key, value] of Object.entries(extra)) {
@@ -1583,6 +1585,7 @@ function escapeHtml(s) {
 })();
 
 document.getElementById('codaOnly').addEventListener('change', () => {
+  updateAdvancedSearchSummary();
   elSearchMode.disabled = document.getElementById('codaOnly').checked;
   updateSearchModeHelp();
   doSearch(false).catch(e => alert(e.message));
@@ -1689,3 +1692,17 @@ document.getElementById('codaOnly').addEventListener('change', () => {
     finally{busy=false;choose.disabled=button.disabled=false;}
   });
 })();
+
+// Language exclusions are view filters; they never delete or rewrite clips.
+document.getElementById('languageExclusions').addEventListener('change', () => {
+  updateAdvancedSearchSummary();
+  selectedClipIds.clear();
+  updateBulkDeleteButton();
+  doSearch(false).catch(e => alert(e.message));
+});
+
+function updateAdvancedSearchSummary() {
+  const count=document.querySelectorAll('input[name="excludeLanguage"]:checked').length+(document.getElementById('codaOnly').checked?1:0);
+  document.getElementById('advancedSearchSummary').textContent='추가 검색 옵션'+(count?` · ${count}개 적용 중`:'');
+}
+updateAdvancedSearchSummary();
