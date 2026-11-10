@@ -67,7 +67,7 @@ class Tests(unittest.TestCase):
 
 
 class WorkerTests(unittest.TestCase):
- def exercise(self, device, fail_gpu=False):
+ def exercise(self, device, fail_gpu=False, gpu_index=0):
   import io
   import types
   from unittest.mock import patch
@@ -82,10 +82,11 @@ class WorkerTests(unittest.TestCase):
     core.set_job(job,status='error',message='missing CUDA library');return
    core.save_data({'clips':[{'transcript':'hello'}]})
    core.set_job(job,status='done',message='ok')
-  request=dict(settings=dict(device=device,performance='eco',threads=1),job_id='j',profile_id='p',audio_id='a',path='a.wav')
+  request=dict(settings=dict(device=device,performance='eco',threads=1,gpu_index=gpu_index),job_id='j',profile_id='p',audio_id='a',path='a.wav')
   output=io.StringIO()
   with patch.dict(sys.modules,{'app':core,'app_fixed':types.SimpleNamespace(run_stt_job_fixed=run),'ctranslate2':types.SimpleNamespace(get_cuda_device_count=lambda:1),'faster_whisper':types.SimpleNamespace(WhisperModel=model)}),patch('sys.stdin',io.StringIO(json.dumps(request)+'\n')),patch('sys.stdout',output):
    stt_worker.main()
+  self.assertEqual(models[-1]['device_index'],gpu_index if models[-1]['device']=='cuda' else 0)
   return calls,[json.loads(line) for line in output.getvalue().splitlines()]
  def test_auto_gpu_failure_retries_cpu_without_terminal_progress(self):
   calls,messages=self.exercise('auto',True)
@@ -95,6 +96,10 @@ class WorkerTests(unittest.TestCase):
  def test_explicit_gpu_failure_is_reported_without_silent_fallback(self):
   calls,messages=self.exercise('cuda',True)
   self.assertEqual(calls,['cuda']);self.assertEqual(messages[-1]['result']['status'],'error')
+ def test_selected_gpu_index_is_used(self):
+  calls,messages=self.exercise('cuda',False,1)
+  self.assertEqual(calls,['cuda'])
+  self.assertEqual([m for m in messages if m['type']=='device'][-1]['actual']['gpu_index'],1)
  def test_cpu_complete_result(self):
   calls,messages=self.exercise('cpu')
   self.assertEqual(calls,['cpu']);self.assertEqual(len(messages[-1]['result']['clips']),1)

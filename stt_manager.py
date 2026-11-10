@@ -22,7 +22,7 @@ def atomic(path, data):
 class Manager:
     def __init__(self, root, command=None):
         self.path = Path(root)/'.desktop'/'stt_settings.json'
-        self.settings = {'device':'auto', 'performance':'balanced', 'threads':0}
+        self.settings = {'device':'auto', 'performance':'balanced', 'threads':0, 'gpu_index':0}
         self.paused = False
         try:
             saved = json.loads(self.path.read_text(encoding='utf-8'))
@@ -31,6 +31,7 @@ class Manager:
             if self.settings['device'] not in ('auto','cpu','cuda'): self.settings['device']='auto'
             if self.settings['performance'] not in ('eco','balanced','maximum'): self.settings['performance']='balanced'
             if type(self.settings['threads']) is not int or not 0 <= self.settings['threads'] <= (os.cpu_count() or 1): self.settings['threads']=0
+            if type(self.settings['gpu_index']) is not int or self.settings['gpu_index']<0: self.settings['gpu_index']=0
             self.paused = bool(saved.get('paused', False))
         except (OSError, ValueError, TypeError): pass
         self.cv = threading.Condition(threading.RLock())
@@ -54,6 +55,8 @@ class Manager:
         if settings['performance'] not in ('eco','balanced','maximum'): raise ValueError('잘못된 성능 모드')
         if type(settings['threads']) is not int or not 0 <= settings['threads'] <= (os.cpu_count() or 1):
             raise ValueError('CPU 스레드 수 범위를 확인하세요.')
+        if type(settings['gpu_index']) is not int or not 0 <= settings['gpu_index'] <= 63:
+            raise ValueError('잘못된 GPU 번호')
         with self.cv:
             self.settings = settings
             self._save()
@@ -205,6 +208,12 @@ def install(core):
                      clips_created=len(result['clips']) if result['status']=='done' else 0)
         core.audit('stt_result',job_id=job_id,status=result['status'],actual=manager.actual)
     core.run_stt_job = run
+
+    from stt_hardware import Inventory
+    inventory = Inventory()
+
+    @core.app.get('/api/stt/hardware')
+    def hardware(): return inventory.get()
 
     @core.app.get('/api/stt/control')
     def status():

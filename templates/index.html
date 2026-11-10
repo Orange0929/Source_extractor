@@ -244,7 +244,12 @@
       <label class="settings-field" for="sttDevice"><span>분석 장치</span><select id="sttDevice"><option value="auto">자동 (GPU 사용 불가 시 CPU)</option><option value="cuda">NVIDIA GPU</option><option value="cpu">CPU</option></select></label>
       <label class="settings-field" for="sttPerformance"><span>성능 모드</span><select id="sttPerformance"><option value="eco">절전</option><option value="balanced">균형</option><option value="maximum">최대 성능</option></select></label>
       <p class="hint">사용하는 CPU 스레드와 파일 사이 대기를 조절합니다. 인식 품질은 바꾸지 않으며 GPU 사용률을 일정 비율로 고정하지는 않습니다.</p>
-      <details class="settings-advanced"><summary>고급 설정</summary><label class="settings-field" for="sttThreads"><span>CPU 스레드 수</span><input id="sttThreads" type="number" min="0" value="0"></label><p class="hint">0은 성능 모드에 맞춰 자동으로 설정합니다.</p></details>
+      <p id="sttHardwareStatus" class="hint" role="status">설정을 열면 장치를 자동으로 확인합니다.</p>
+      <details class="settings-advanced"><summary>고급 설정</summary>
+        <label class="settings-field" for="sttThreadMode"><span>CPU 자원 배정</span><select id="sttThreadMode"><option value="auto">자동 (권장)</option><option value="manual">수동 설정</option></select></label>
+        <label id="sttThreadManual" class="settings-field" for="sttThreads" hidden><span>CPU 스레드 수</span><input id="sttThreads" type="number" min="1" value="1"></label>
+        <p id="sttThreadHelp" class="hint"></p>
+      </details>
       <p id="sttDeviceStatus" class="hint" role="status"></p>
       <p class="hint">GPU 분석에는 호환 CUDA/cuDNN 런타임이 필요합니다. 설정은 현재 파일이 끝난 뒤 다음 분석부터 적용됩니다.</p>
     </section>
