@@ -236,7 +236,6 @@
   <script src="/static/transcript_editor.js?v={{ asset_version }}"></script>
   <script src="/static/desktop_ui.js?v={{ asset_version }}"></script>
 <script src="/static/audio_manager.js?v={{ asset_version }}"></script>
-  <script src="/static/stt_control.js?v={{ asset_version }}"></script>
   <dialog id="appSettings" class="app-settings" aria-labelledby="appSettingsTitle">
     <div class="settings-heading"><h2 id="appSettingsTitle">설정</h2><button id="sttSettingsClose" class="ghost" type="button" aria-label="설정 닫기">닫기</button></div>
     <section aria-labelledby="sttSettingsTitle">
@@ -251,5 +250,6 @@
     </section>
     <div class="settings-footer"><span id="sttSettingsNotice" role="status"></span><button id="sttSave" type="button">변경 사항 저장</button></div>
   </dialog>
+  <script src="/static/stt_control.js?v={{ asset_version }}" defer></script>
 </body>
 </html>
