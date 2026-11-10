@@ -3,7 +3,7 @@
   if(!panel)return;
   const find=id=>document.getElementById(id);
   const dialog=find('appSettings');
-  let latest=null, hardware=null;
+  let latest=null, hardware=null, installPhase='idle';
   const deviceValue=settings=>settings.device==='cuda'?'cuda:'+(settings.gpu_index||0):settings.device;
   function devices() {
     const select=find('sttDevice'), selected=editing?select.value:(latest?deviceValue(latest.settings):'auto');
@@ -32,12 +32,29 @@
       find('sttHardwareStatus').textContent=`CPU: ${hardware.cpu.name} (${hardware.cpu.logical_threads}스레드) · ${hardware.gpus.map(g=>g.name+': '+g.reason).join(' · ')||hardware.message||'NVIDIA GPU 감지 안 됨'}`;
     }catch(e){find('sttHardwareStatus').textContent='장치 확인 실패: '+e.message;}
   }
+  async function installStatus() {
+    const data=await request('/api/stt/gpu-install');
+    find('sttInstallStatus').textContent=data.message;
+    find('sttInstallGpu').disabled=data.busy;
+    if(data.phase==='done'&&installPhase!=='done')await detect();
+    installPhase=data.phase;
+  }
+  find('sttInstallGpu').onclick=async()=>{
+    if(!confirm('앱 전용 폴더에 NVIDIA GPU 실행 구성을 약 1.1GB 다운로드합니다. 기존 CPU·피치 패키지는 바꾸지 않습니다. 분석을 일시정지하고 설치할까요?'))return;
+    find('sttInstallGpu').disabled=true;
+    try {
+      const data=await request('/api/stt/gpu-install',{});
+      installPhase=data.phase;find('sttInstallStatus').textContent=data.message;
+    }catch(e){find('sttInstallStatus').textContent=e.message;find('sttInstallGpu').disabled=false;}
+  };
+  find('sttRefreshHardware').onclick=()=>detect();
   find('btnAppSettings').onclick=async()=>{
     editing=false;find('sttSettingsNotice').textContent='';
     if(latest)render(latest);
     dialog.showModal();
     try{await refresh();}catch(e){find('sttSettingsNotice').textContent=e.message;}
     await detect();
+    try{await installStatus();}catch(e){find('sttInstallStatus').textContent=e.message;}
   };
   find('sttSettingsClose').onclick=()=>dialog.close();
   dialog.addEventListener('keydown',e=>e.stopPropagation());
@@ -77,6 +94,6 @@
     try {render(await request('/api/stt/control/'+action,{}));find('sttNotice').textContent=action==='stop'?'중단 요청됨. 업로드는 별도이며 계속될 수 있습니다.':'';}
     catch(e){find('sttNotice').textContent=e.message;}
   };
-  async function poll(){try{await refresh();}catch(e){find('sttStatus').textContent='분석 상태 확인 실패: '+e.message;}finally{setTimeout(poll,2000);}}
+  async function poll(){try{await refresh();if(dialog.open||installPhase==='installing')await installStatus();}catch(e){find('sttStatus').textContent='분석 상태 확인 실패: '+e.message;}finally{setTimeout(poll,2000);}}
   poll();
 })();

@@ -105,3 +105,12 @@ GPU 추론에는 호환 NVIDIA 드라이버 및 CUDA/cuDNN 런타임이 별도�
 Whisper 작업은 별도 프로세스에서 수행하고, 완성된 결과만 서버가 기존 데이터 잠금 아래 저장합니다. 작업별 최종 결과·실제 장치는 활동 로그에 기록하며, 분석 프로세스 상세 오류는 설치 데이터 폴더의 `.desktop/stt_worker.log`에 남깁니다. 위 완료/실패/중단 개수는 현재 실행 중 세션의 작업 기준입니다.
 
 개발 검증: `python -m unittest discover -s tests -p test_stt_manager.py`, `python -m unittest discover -s tests -p test_desktop_server.py`.
+
+
+### 앱에서 GPU 실행 구성 준비하기 (Windows)
+
+GPU가 감지되지만 `cublas64_12.dll` 등을 찾지 못하면 **⚙ 설정 → GPU 실행 구성 설치**를 누릅니다. 분석 중에는 먼저 일시정지를 누르고 현재 파일 완료까지 기다립니다. 확인창에서 동의한 뒤 약 1.1GB의 NVIDIA 공식 Windows 패키지를 PyPI에서 받습니다. 설치 로그는 `.desktop/gpu_install.log`입니다.
+
+cuBLAS 12.4.5.8, cuDNN 9.1.0.70, CUDA runtime 12.4.127을 앱 데이터 폴더의 `.desktop/gpu-runtime`에 별도로 설치합니다. `--target`과 `--no-deps`를 사용하므로 기존 CPU PyTorch·피치 패키지를 교체하지 않고, 시스템 PATH도 수정하지 않습니다. 받은 DLL 경로는 GPU 감지·Whisper 분석 자식 프로세스에만 등록합니다. 실패하면 기존 구성은 보존하며, 진행 중에는 앱의 정상 종료/업데이트 재시작을 막아 설치 중임을 표시합니다.
+
+설치 후 장치를 다시 확인하고 자동 또는 준비된 GPU를 선택합니다. 대기 작업이 있으면 **재개**를 누릅니다. GPU 드라이버/하드웨어 문제까지 해결하는 설치 프로그램은 아니며 실제 모델 추론은 분석 시 최종 확인합니다. GPU 라이브러리는 앱 업데이트와 별도로 사용자가 버튼을 눌러 설치해야 합니다.

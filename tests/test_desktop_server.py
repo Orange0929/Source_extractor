@@ -93,6 +93,8 @@ class DesktopServerTest(unittest.TestCase):
                             if time.monotonic()>deadline:raise
                             time.sleep(.05)
                     self.assertFalse(health['busy'])
+                    with request('/api/stt/gpu-install') as response:
+                        self.assertFalse(json.load(response)['busy'])
                     with request('/api/stt/hardware') as response:
                         hardware=json.load(response)
                         self.assertGreater(hardware['cpu']['logical_threads'],0)
