@@ -31,13 +31,13 @@ def main():
         def execute(device):
             nonlocal model, model_key
             send({'type':'device','actual':dict(device=None,threads=threads,message=device+' 모델 준비 중…')})
-            key = (device,threads,core.WHISPER_MODEL_NAME)
+            key = (device,threads,core.WHISPER_MODEL_NAME,settings.get('gpu_index',0))
             if model_key != key:
                 model = None;model_key = None
                 compute = 'float16' if device=='cuda' else 'int8'
-                model = WhisperModel(core.WHISPER_MODEL_NAME,device=device,compute_type=compute,cpu_threads=threads,num_workers=1)
+                model = WhisperModel(core.WHISPER_MODEL_NAME,device=device,compute_type=compute,cpu_threads=threads,num_workers=1,device_index=settings.get('gpu_index',0) if device=='cuda' else 0)
                 model_key = key
-            send({'type':'device','actual':dict(device=device,threads=threads,message=fallback or '분석 준비 완료')})
+            send({'type':'device','actual':dict(device=device,threads=threads,gpu_index=settings.get('gpu_index',0) if device=='cuda' else None,message=fallback or '분석 준비 완료')})
             core.get_whisper_model = lambda:model
             result = {'status':'error','message':'분석 결과 없음','clips':[]}
             core.load_data = lambda:{'clips':[]}

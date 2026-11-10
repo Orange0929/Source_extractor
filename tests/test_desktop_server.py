@@ -93,6 +93,11 @@ class DesktopServerTest(unittest.TestCase):
                             if time.monotonic()>deadline:raise
                             time.sleep(.05)
                     self.assertFalse(health['busy'])
+                    with request('/api/stt/hardware') as response:
+                        hardware=json.load(response)
+                        self.assertGreater(hardware['cpu']['logical_threads'],0)
+                        self.assertTrue(hardware['cpu']['name'])
+                        self.assertIsInstance(hardware['gpus'],list)
                     with request('/api/stt/control') as response:
                         self.assertEqual(json.load(response)['settings']['performance'],'balanced')
                     def stt_post(path, data):

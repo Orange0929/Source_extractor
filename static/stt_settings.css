@@ -13,3 +13,5 @@
 .stt-transport { border-top:1px solid #353c49; margin-top:16px; padding-top:8px; }
 .stt-transport[hidden] { display:none; }
 @media(max-width:480px) { .settings-field { grid-template-columns:1fr; gap:6px; } .settings-footer { align-items:flex-start; flex-direction:column; } }
+
+.settings-field[hidden] { display:none; }
