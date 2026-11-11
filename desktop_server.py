@@ -57,6 +57,15 @@ def main():
                 kwargs['creationflags'] = kwargs.get('creationflags', 0) | subprocess.CREATE_NO_WINDOW
                 super().__init__(*args, **kwargs)
         subprocess.Popen = HiddenPopen
+    import faulthandler
+    fault_dir=Path(os.environ.get('SOURCE_EXTRACTOR_DATA_DIR',Path(__file__).parent))/'.desktop'
+    fault_dir.mkdir(parents=True,exist_ok=True)
+    fault_log=(fault_dir/'server-fault.log').open('a',encoding='utf-8')
+    fault_log.write(f'\nServer start pid={os.getpid()} time={time.time()}\n');fault_log.flush()
+    faulthandler.enable(file=fault_log,all_threads=True)
+    import logging
+    logging.basicConfig(level=logging.WARNING)
+    logging.getLogger(__name__).warning('Local server starting pid=%s',os.getpid())
     import uvicorn
     import app_fixed
     import app as core
@@ -120,7 +129,13 @@ def main():
         Path(os.environ['SOURCE_EXTRACTOR_PORT_FILE']).write_text(str(sock.getsockname()[1]),encoding='ascii')
         server = uvicorn.Server(uvicorn.Config(TrackRequests(app), log_level='warning', access_log=False))
         await server.serve(sockets=[sock])
-    asyncio.run(serve())
+    try:
+        asyncio.run(serve())
+    except BaseException:
+        logging.getLogger(__name__).exception('Local server terminated unexpectedly')
+        raise
+    finally:
+        logging.getLogger(__name__).warning('Local server stopped pid=%s',os.getpid())
 
 
 if __name__ == '__main__':

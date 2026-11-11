@@ -30,7 +30,6 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from faster_whisper import WhisperModel
 
 # =========================
 # Paths / App
@@ -89,6 +88,7 @@ def audit(action, **fields):
 def get_whisper_model() -> WhisperModel:
     global _whisper_model
     if _whisper_model is None:
+        from faster_whisper import WhisperModel
         _whisper_model = WhisperModel(
             WHISPER_MODEL_NAME,
             device=WHISPER_DEVICE,
@@ -1345,8 +1345,11 @@ def api_audio_analysis(audio_id: str, start_s: float, end_s: float, kind: str = 
         return JSONResponse({"error": "다른 구간 분석 중이에요. 잠시 후 다시 시도해 주세요."}, status_code=429)
     tmp = cache.with_name(f".{key}.{uuid.uuid4().hex}.tmp")
     try:
-        samples = read_audio(src, start_s, end_s)
-        result = pitch(samples, start_s) if kind == "pitch" else envelope(samples)
+        if kind == "pitch":
+            from pitch_process import analyze_pitch
+            result = analyze_pitch(src, start_s, end_s)
+        else:
+            result = envelope(read_audio(src, start_s, end_s))
         result.update(start=start_s, end=end_s)
         if kind == "pitch":
             portable = pitch_store.save(WAVEFORM_DIR / "pitch", result, digest)
