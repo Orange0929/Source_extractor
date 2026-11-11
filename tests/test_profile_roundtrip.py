@@ -47,15 +47,26 @@ class ProfileRoundtrip(unittest.TestCase):
         self.client=TestClient(core.app)
         self.addCleanup(self.client.close)
 
+    def test_pitch_process_exit_does_not_take_down_http_api(self):
+        from pitch_process import PitchProcess
+        import sys
+        worker=PitchProcess([sys.executable,'-c','import os;os._exit(9)'])
+        try:
+            with patch('pitch_process.process',worker):
+                result=self.client.get('/api/audio_analysis/a',params={'start_s':.25,'end_s':1.75,'kind':'pitch'})
+                self.assertEqual(result.status_code,500)
+                self.assertEqual(self.client.get('/api/profiles').status_code,200)
+        finally:worker.close()
+
     def test_roundtrip_preserves_pitch_without_model(self):
         before=self.client.get('/api/audio_analysis/a',params={'start_s':.2,'end_s':1.8}).json()
         params = {'start_s':.2,'end_s':1.8,'kind':'pitch'}
-        with patch.object(core, 'pitch', return_value={'points':[[.2,220.0],[.21,None]],'method':'FCPE'}) as detector:
+        with patch('pitch_process.analyze_pitch', return_value={'points':[[.2,220.0],[.21,None]],'method':'FCPE'}) as detector:
             pitch_before = self.client.get('/api/audio_analysis/a', params=params).json()
             self.assertEqual(detector.call_count, 1)
         # Restart-equivalent: clear all in-memory content fingerprints.
         core.pitch_store._digest.cache_clear()
-        with patch.object(core, 'pitch', side_effect=AssertionError('model must not run')):
+        with patch('pitch_process.analyze_pitch', side_effect=AssertionError('model must not run')):
             self.assertEqual(self.client.get('/api/audio_analysis/a', params=params).json(), pitch_before)
         exported=self.client.get('/api/export/profile/p')
         self.assertEqual(exported.status_code,200)
@@ -79,7 +90,7 @@ class ProfileRoundtrip(unittest.TestCase):
         self.assertEqual(before,after.json())
         self.assertEqual(imported.json()['pitch_results'], 1)
         core.pitch_store._digest.cache_clear()
-        with patch.object(core, 'pitch', side_effect=AssertionError('import must restore pitch')):
+        with patch('pitch_process.analyze_pitch', side_effect=AssertionError('import must restore pitch')):
             r=self.client.get('/api/audio_analysis/'+aid, params=params)
             self.assertEqual(r.status_code,200,r.text)
             self.assertEqual(r.json(),pitch_before)
@@ -97,14 +108,14 @@ class ProfileRoundtrip(unittest.TestCase):
         self.assertEqual(exported.status_code,200)
         with zipfile.ZipFile(io.BytesIO(exported.content)) as z:
             self.assertTrue(any(n.startswith('pitch/') for n in z.namelist()))
-        with patch.object(core,'pitch',side_effect=AssertionError('legacy migration must not infer')):
+        with patch('pitch_process.analyze_pitch',side_effect=AssertionError('legacy migration must not infer')):
             r = self.client.get('/api/audio_analysis/a',params={'start_s':.2,'end_s':1.8,'kind':'pitch'})
             self.assertEqual(r.status_code,200,r.text)
             self.assertEqual(r.json()['points'],result['points'])
 
     def test_changed_range_and_corrupt_cache_reanalyze(self):
         params={'start_s':.2,'end_s':1.8,'kind':'pitch'}
-        with patch.object(core,'pitch',return_value={'points':[[.2,220.0]],'method':'FCPE'}) as detector:
+        with patch('pitch_process.analyze_pitch',return_value={'points':[[.2,220.0]],'method':'FCPE'}) as detector:
             self.assertEqual(self.client.get('/api/audio_analysis/a',params=params).status_code,200)
             cached=next((core.WAVEFORM_DIR/'pitch').glob('*.json'))
             cached.write_text('{broken')

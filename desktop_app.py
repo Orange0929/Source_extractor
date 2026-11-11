@@ -280,6 +280,9 @@ class DesktopApi:
                 *[(f'activity.jsonl{suffix}', self._root/'.desktop'/f'activity.jsonl{suffix}') for suffix in ('.3','.2','.1','')],
                 ('app.log', self._root/'.desktop'/'app.log'),
                 ('server.log', self._root/'.desktop'/'server.log'),
+                ('server-fault.log', self._root/'.desktop'/'server-fault.log'),
+                ('pitch_worker.log', self._root/'.desktop'/'pitch_worker.log'),
+                ('stt_worker.log', self._root/'.desktop'/'stt_worker.log'),
                 ('update.log', self._root/'.desktop'/'update.log'),
                 ('install_log.txt', self._root/'install_log.txt'),
             ):
