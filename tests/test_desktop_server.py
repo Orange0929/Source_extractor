@@ -1,7 +1,10 @@
 """Live loopback smoke test, with STT model loading stubbed out."""
+import asyncio
 import json
 import os
 from pathlib import Path
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -12,10 +15,37 @@ import urllib.request
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from desktop_server import blocks_close, job_reason, operation_label
+from desktop_server import blocks_close, configure_server_event_loop, job_reason, operation_label
 from concurrent.futures import Future
 from unittest.mock import Mock, patch
 from desktop_app import DesktopApi
+
+
+class ServerEventLoopTest(unittest.TestCase):
+    def test_windows_uses_selector_policy_before_starting_server(self):
+        with patch('desktop_server.sys.platform', 'win32'), \
+             patch.object(asyncio, 'WindowsSelectorEventLoopPolicy', create=True) as policy, \
+             patch.object(asyncio, 'set_event_loop_policy') as install:
+            configure_server_event_loop()
+            policy.assert_called_once_with()
+            install.assert_called_once_with(policy.return_value)
+
+    def test_other_platforms_keep_their_event_loop_policy(self):
+        with patch('desktop_server.sys.platform', 'linux'), \
+             patch.object(asyncio, 'set_event_loop_policy') as install:
+            configure_server_event_loop()
+            install.assert_not_called()
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows event loop implementation')
+    def test_windows_runner_really_uses_selector_loop(self):
+        original = asyncio.get_event_loop_policy()
+        try:
+            configure_server_event_loop()
+            async def check():
+                self.assertIsInstance(asyncio.get_running_loop(), asyncio.SelectorEventLoop)
+            asyncio.run(check())
+        finally:
+            asyncio.set_event_loop_policy(original)
 
 
 class CloseTrackingTest(unittest.TestCase):
@@ -93,6 +123,28 @@ class DesktopServerTest(unittest.TestCase):
                             if time.monotonic()>deadline:raise
                             time.sleep(.05)
                     self.assertFalse(health['busy'])
+                    # Source switches cancel in-flight media/range responses.
+                    # Exercise abrupt TCP resets, including clients abandoning
+                    # an incomplete request, then verify the listener survives.
+                    address = ('127.0.0.1', int(port_file.read_text()))
+                    linger = struct.pack('hh' if os.name == 'nt' else 'ii', 1, 0)
+                    for index in range(80):
+                        with socket.create_connection(address, timeout=5) as client:
+                            client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, linger)
+                            if index % 2:
+                                client.sendall(b'GET /static/app.js HTTP/1.1\r\nHost: localhost\r\nRange: bytes=0-65535\r\n\r\n')
+                                client.recv(128)
+                            else:
+                                client.sendall(b'GET /static/app.js HTTP/1.1\r\n')
+                        if index % 10 == 9:
+                            with request('/api/desktop/health') as response:
+                                self.assertFalse(json.load(response)['busy'])
+                    with request('/static/app.js') as response:
+                        self.assertGreater(len(response.read()), 1000)
+                    self.assertIsNone(proc.poll())
+                    if sys.platform == 'win32':
+                        self.assertIn('Local server event loop: _WindowsSelectorEventLoop',
+                                      (root/'server.log').read_text())
                     with request('/api/stt/gpu-install') as response:
                         self.assertFalse(json.load(response)['busy'])
                     with request('/api/stt/hardware') as response:

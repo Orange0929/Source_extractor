@@ -10,6 +10,16 @@ import time
 from collections import Counter
 
 
+def configure_server_event_loop():
+    # Python 3.11's Windows Proactor accept loop closes the listening socket on
+    # WinError 64. WebView cancelling media requests can then leave the process
+    # alive but every HTTP request refused. Use the socket-based selector loop
+    # for this local HTTP server. Audio/STT children use subprocess.Popen and
+    # reader threads, not asyncio subprocess/pipe transports.
+    if sys.platform == 'win32':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+
 def operation_label(scope):
     path = scope.get('path', '')
     for prefix, label in (
@@ -49,6 +59,7 @@ def blocks_close(scope):
 
 
 def main():
+    configure_server_event_loop()
     # ffmpeg children must not flash command windows when launched by pythonw.
     if os.name == 'nt':
         original = subprocess.Popen
@@ -121,6 +132,8 @@ def main():
                 if tracked: active.pop(request_key, None)
 
     async def serve():
+        logging.getLogger(__name__).warning('Local server event loop: %s',
+                                            type(asyncio.get_running_loop()).__name__)
         # Reuse the same port when available so WebView localStorage stays stable.
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try: sock.bind(('127.0.0.1', int(os.environ.get('SOURCE_EXTRACTOR_PORT','0'))))
